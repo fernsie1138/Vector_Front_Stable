@@ -784,7 +784,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 126;
+const GAME_VERSION = 127;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -1427,7 +1427,7 @@ const damageCtx = damageCanvas.getContext('2d');
 // these null and use the normal deterministic layout generators. Loading a
 // save supplies the recorded layouts so the visible map tiles are reproduced
 // exactly rather than merely regenerated from the current code.
-let savedTileLayouts = { grassland: null, ice: null, urban: null };
+let savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null };
 function tileLayoutValue(name, col, row) {
   const layout = savedTileLayouts[name];
   const N = name === 'grassland' ? GRASSLAND_ATLAS_GRID :
@@ -1716,6 +1716,112 @@ iceTileImages.forEach(img=>{
 if (grasslandTilesReady) buildGrasslandAtlas();
 if (iceTilesReady) buildIceAtlas();
 // ---------------------------------------------------------------------------
+// Desert tile system. Desert previously used a purely procedural speckle
+// texture (regenerateOrganicGroundTexture) - it now uses these twelve
+// supplied 300x300 sand/gravel/scrub tiles instead, the same deterministic
+// atlas-with-cross-fade-seams approach grassland/ice/Urban Hell already use,
+// so the same map seed reproduces the same ground layout.
+// ---------------------------------------------------------------------------
+const DESERT_TILE_SIZE = 300;
+const DESERT_ATLAS_GRID = 6;
+const desertTileSources = ["assets/terrain/desert_tiles/tile_01.png", "assets/terrain/desert_tiles/tile_02.png", "assets/terrain/desert_tiles/tile_03.png", "assets/terrain/desert_tiles/tile_04.png", "assets/terrain/desert_tiles/tile_05.png", "assets/terrain/desert_tiles/tile_06.png", "assets/terrain/desert_tiles/tile_07.png", "assets/terrain/desert_tiles/tile_08.png", "assets/terrain/desert_tiles/tile_09.png", "assets/terrain/desert_tiles/tile_10.png", "assets/terrain/desert_tiles/tile_11.png", "assets/terrain/desert_tiles/tile_12.png"];
+const desertTileImages = desertTileSources.map(src => {
+  const img = new Image();
+  img.decoding = 'async';
+  img.src = src;
+  return img;
+});
+let desertTilesReady = desertTileImages.every(img => img.complete && img.naturalWidth > 0);
+let desertAtlasCanvas = null;
+
+function desertTileIndex(col,row) {
+  const saved = tileLayoutValue('desert', col, row);
+  if (saved !== null && saved < desertTileImages.length) return saved;
+  let h = Math.imul(col + 47, 374761393) ^ Math.imul(row + 73, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  let idx = (h >>> 0) % desertTileImages.length;
+  if (col > 0) {
+    const left = desertTileIndex(col-1,row);
+    if (idx === left) idx = (idx + 1 + ((h>>>8)%9)) % desertTileImages.length;
+  }
+  if (row > 0) {
+    const above = desertTileIndex(col,row-1);
+    if (idx === above) idx = (idx + 1 + ((h>>>16)%9)) % desertTileImages.length;
+  }
+  return idx;
+}
+
+function buildDesertAtlas() {
+  if (!desertTilesReady) return;
+  const S=DESERT_TILE_SIZE, N=DESERT_ATLAS_GRID;
+  const atlas=document.createElement('canvas');
+  atlas.width=S*N; atlas.height=S*N;
+  const ac=atlas.getContext('2d');
+  ac.imageSmoothingEnabled=true;
+  for(let row=0;row<N;row++) for(let col=0;col<N;col++) {
+    ac.drawImage(desertTileImages[desertTileIndex(col,row)],col*S,row*S,S,S);
+  }
+
+  const seam=document.createElement('canvas');
+  seam.width=atlas.width; seam.height=atlas.height;
+  const sc=seam.getContext('2d');
+  sc.drawImage(atlas,0,0);
+  const B=12, half=B/2;
+
+  function vStrip(a,b) {
+    const strip=document.createElement('canvas'); strip.width=B; strip.height=S;
+    const c=strip.getContext('2d');
+    c.drawImage(a,S-B,0,B,S,0,0,B,S);
+    const r=document.createElement('canvas'); r.width=B; r.height=S;
+    const rc=r.getContext('2d');
+    rc.drawImage(b,0,0,B,S);
+    rc.globalCompositeOperation='destination-in';
+    const g=rc.createLinearGradient(0,0,B,0);
+    g.addColorStop(0,'rgba(255,255,255,0)'); g.addColorStop(1,'rgba(255,255,255,1)');
+    rc.fillStyle=g; rc.fillRect(0,0,B,S); c.drawImage(r,0,0); return strip;
+  }
+  function hStrip(a,b) {
+    const strip=document.createElement('canvas'); strip.width=S; strip.height=B;
+    const c=strip.getContext('2d');
+    c.drawImage(a,0,S-B,S,B,0,0,S,B);
+    const r=document.createElement('canvas'); r.width=S; r.height=B;
+    const rc=r.getContext('2d');
+    rc.drawImage(b,0,0,S,B);
+    rc.globalCompositeOperation='destination-in';
+    const g=rc.createLinearGradient(0,0,0,B);
+    g.addColorStop(0,'rgba(255,255,255,0)'); g.addColorStop(1,'rgba(255,255,255,1)');
+    rc.fillStyle=g; rc.fillRect(0,0,S,B); c.drawImage(r,0,0); return strip;
+  }
+  for(let row=0;row<N;row++) for(let boundary=1;boundary<N;boundary++) {
+    sc.drawImage(vStrip(desertTileImages[desertTileIndex(boundary-1,row)],desertTileImages[desertTileIndex(boundary,row)]),boundary*S-half,row*S);
+  }
+  for(let col=0;col<N;col++) for(let boundary=1;boundary<N;boundary++) {
+    sc.drawImage(hStrip(desertTileImages[desertTileIndex(col,boundary-1)],desertTileImages[desertTileIndex(col,boundary)]),col*S,boundary*S-half);
+  }
+  // Wrap edges so the whole atlas repeats continuously.
+  for(let row=0;row<N;row++) {
+    const strip=vStrip(desertTileImages[desertTileIndex(N-1,row)],desertTileImages[desertTileIndex(0,row)]);
+    sc.drawImage(strip,-half,row*S); sc.drawImage(strip,atlas.width-half,row*S);
+  }
+  for(let col=0;col<N;col++) {
+    const strip=hStrip(desertTileImages[desertTileIndex(col,N-1)],desertTileImages[desertTileIndex(col,0)]);
+    sc.drawImage(strip,col*S,-half); sc.drawImage(strip,col*S,atlas.height-half);
+  }
+  desertAtlasCanvas=seam;
+  groundTexturePattern=ctx.createPattern(desertAtlasCanvas,'repeat');
+}
+
+function markDesertTilesLoaded() {
+  desertTilesReady=desertTileImages.every(img=>img.complete && img.naturalWidth>0);
+  if(desertTilesReady && currentBiome==='desert') buildDesertAtlas();
+}
+desertTileImages.forEach(img=>{
+  if(!img.complete || !img.naturalWidth) img.addEventListener('load',markDesertTilesLoaded,{once:true});
+});
+if (desertTilesReady) buildDesertAtlas();
+
+// ---------------------------------------------------------------------------
 // Urban Hell industrial tile system v108.
 // Urban Hell uses ONLY these twelve supplied 300x300 industrial/asphalt/
 // concrete tiles for its ground. The old procedural Urban Hell background is
@@ -1811,6 +1917,15 @@ function regenerateGroundTexture() {
   }
   if (currentBiome === 'urban') {
     if (urbanHellTilesReady) buildUrbanHellAtlas();
+    else groundTexturePattern = null;
+    return;
+  }
+  if (currentBiome === 'desert') {
+    // Desert now uses its own 12-tile photo set (see buildDesertAtlas)
+    // instead of the old procedural speckle generator below, which the
+    // remaining biomes without a real tile set (none, currently) would
+    // still fall through to.
+    if (desertTilesReady) buildDesertAtlas();
     else groundTexturePattern = null;
     return;
   }
@@ -3317,6 +3432,34 @@ function genTrees(seedValue) {
     return true;
   }
 
+  // "Place plenty of trees around the base of mountains" - a generous ring
+  // of trees hugging the outside edge of every mountain on the map (skipped
+  // entirely for biomes with no trees at all, via the early return at the
+  // top of this function). Ring size scales with the mountain's own size,
+  // and reuses tryPlaceTree for every candidate point, so a spot that's
+  // actually on the mountain itself, on a road, on another mountain nearby,
+  // or too close to a base start still gets rejected exactly like any other
+  // tree placement - this only supplies candidate positions just outside
+  // each mountain's own elliptical footprint (see placeMountainRange in
+  // genTerrain for that footprint), it doesn't bypass any of the normal
+  // placement rules.
+  function plantMountainRingTrees() {
+    mountains.forEach(m => {
+      const treeCount = Math.max(10, Math.round((m.rx + m.ry) / 8));
+      const cosR = Math.cos(m.rotation), sinR = Math.sin(m.rotation);
+      for (let i=0;i<treeCount;i++) {
+        const theta = rnd()*Math.PI*2;
+        const margin = 15 + rnd()*55; // how far outside the mountain's own edge this ring sits
+        const lx = Math.cos(theta)*(m.rx+margin);
+        const ly = Math.sin(theta)*(m.ry+margin);
+        const x = m.x + lx*cosR - ly*sinR;
+        const y = m.y + lx*sinR + ly*cosR;
+        tryPlaceTree(x, y);
+      }
+    });
+  }
+  plantMountainRingTrees();
+
   // Solitary trees and small groups, scattered generally across the map -
   // only for the "scattered" tree style (Desert/Ice/Urban's own scattered
   // fallback). "clumped" (Grassy Plains/Fortress City) skips this entirely,
@@ -4786,7 +4929,7 @@ placeExtraRandomSupplyDepots(3);
 function generateNewMap(sizeKey, biomeKey) {
   // A new game gets a newly generated visual tile layout. A loaded game sets
   // savedTileLayouts below and therefore reproduces its exact map instead.
-  savedTileLayouts = { grassland: null, ice: null, urban: null };
+  savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null };
   applyMapSize(sizeKey);
   applyBiome(biomeKey || 'desert');
 
@@ -9750,6 +9893,7 @@ function captureTileLayouts() {
   out.grassland = [];
   out.ice = [];
   out.urban = [];
+  out.desert = [];
   for (let row=0; row<GRASSLAND_ATLAS_GRID; row++) {
     for (let col=0; col<GRASSLAND_ATLAS_GRID; col++) {
       out.grassland.push(grasslandTileIndex(col,row));
@@ -9763,6 +9907,11 @@ function captureTileLayouts() {
   for (let row=0; row<URBAN_HELL_ATLAS_GRID; row++) {
     for (let col=0; col<URBAN_HELL_ATLAS_GRID; col++) {
       out.urban.push(urbanHellTileIndex(col,row));
+    }
+  }
+  for (let row=0; row<DESERT_ATLAS_GRID; row++) {
+    for (let col=0; col<DESERT_ATLAS_GRID; col++) {
+      out.desert.push(desertTileIndex(col,row));
     }
   }
   return out;
@@ -10027,9 +10176,9 @@ function applyLoadedGame(data) {
   // Restore the exact tiled-ground layout before restoring the biome. The
   // biome's atlas builder consults these arrays, so the saved visual tile
   // arrangement is used immediately when the ground texture is rebuilt.
-  savedTileLayouts = { grassland: null, ice: null, urban: null };
+  savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null };
   if (data.tileLayouts && typeof data.tileLayouts === 'object') {
-    for (const key of ['grassland','ice','urban']) {
+    for (const key of ['grassland','ice','urban','desert']) {
       const layout = data.tileLayouts[key];
       if (Array.isArray(layout)) savedTileLayouts[key] = layout.map(Number);
     }
