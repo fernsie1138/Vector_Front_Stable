@@ -784,7 +784,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 128;
+const GAME_VERSION = 129;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -2919,7 +2919,7 @@ function genTerrain(seedValue){
       if (availableRadius < 55) break; // no room here even for a small mountain - stop the range
       const maxLongSide = Math.min(460, availableRadius/0.46);
       const longSide = Math.min(maxLongSide, 200 + rnd()*260);
-      const rotation = rnd()*Math.PI*2;
+      const rotation = 0; // "do not rotate mountains, but you can scale them" - size still varies (above), orientation never does
       let w, h;
       if (type.aspectRatio >= 1) { w = longSide; h = longSide/type.aspectRatio; }
       else { h = longSide; w = longSide*type.aspectRatio; }
@@ -3020,33 +3020,25 @@ function genTerrain(seedValue){
   // of a map" too.
   // ---------------------------------------------------------------------------
   lakes = [];
-  const LAKE_SIZE_TIERS = [
-    { label: 'small',  longSide: [180,300] },
-    { label: 'medium', longSide: [300,440] },
-    { label: 'large',  longSide: [420,600] },
-  ];
+  const LAKE_LONG_SIDE = 320; // fixed - "do not scale the size of lakes, but rotate them randomly"
   function overlapsExistingLake(x, y, pad) {
     return lakes.some(l => Math.hypot(l.x-x, l.y-y) < Math.max(l.rx,l.ry)+pad);
   }
   function placeLake(cx, cy) {
-    // Same "shrink to fit near a base rather than refuse to place at all"
-    // approach as maxStampRadiusAt for mountains - see that comment for why
-    // this is a size cap, not a clearance change.
-    const availableRadius = maxStampRadiusAt(cx, cy);
-    if (availableRadius < 45) return null; // no room here even for a tiny lake
-    const tier = LAKE_SIZE_TIERS[Math.floor(rnd()*LAKE_SIZE_TIERS.length)];
     const key = LAKE_TYPES[Math.floor(rnd()*LAKE_TYPES.length)].key;
     const type = LAKE_TYPE_BY_KEY[key];
-    const [minL,maxL] = tier.longSide;
-    const maxLongSide = Math.min(maxL, availableRadius/0.46);
-    if (maxLongSide < minL*0.5) return null; // this tier doesn't reasonably fit here even shrunk
-    const longSide = Math.min(maxLongSide, minL + rnd()*(maxL-minL));
-    const rotation = rnd()*Math.PI*2;
+    const rotation = rnd()*Math.PI*2; // size is fixed (above); rotation is the only source of variety now
     let w, h;
-    if (type.aspectRatio >= 1) { w = longSide; h = longSide/type.aspectRatio; }
-    else { h = longSide; w = longSide*type.aspectRatio; }
+    if (type.aspectRatio >= 1) { w = LAKE_LONG_SIDE; h = LAKE_LONG_SIDE/type.aspectRatio; }
+    else { h = LAKE_LONG_SIDE; w = LAKE_LONG_SIDE*type.aspectRatio; }
     const rx = (w/2)*0.92, ry = (h/2)*0.92;
-    lakes.push({ id: ++lakeIdCounter, x: cx, y: cy, key, longSide, aspectRatio: type.aspectRatio, rotation, rx, ry });
+    // Since size can no longer shrink to fit a tight spot near a base (it's
+    // fixed now, unlike mountains which are still allowed to scale down -
+    // see maxStampRadiusAt there), a candidate point too close to a base for
+    // this fixed size simply fails outright; the caller's own retry loop
+    // (trying fresh random points) is what finds it a home instead.
+    if (tooCloseToBase(cx, cy, Math.max(rx,ry))) return null;
+    lakes.push({ id: ++lakeIdCounter, x: cx, y: cy, key, longSide: LAKE_LONG_SIDE, aspectRatio: type.aspectRatio, rotation, rx, ry });
     return { x: cx, y: cy };
   }
 
@@ -4862,7 +4854,18 @@ function makeTank(team, x, y, unitType) {
     // the Sapper dies, or the target reaches full health.
     repairTargetId: null,
     beingFieldRepaired: false,
-    fieldRepairerId: null
+    fieldRepairerId: null,
+    // Sapper field-demolish (see updateDemolitions): demolishTargetId is set
+    // on the Sapper doing the demolishing; beingDemolished/demolisherId are
+    // set on the friendly unit or structure being demolished, which is fully
+    // immobilized/can't fire for as long as they're set (same freeze
+    // treatment as beingFieldRepaired above) - cleared the moment either
+    // party is given a new order, the Sapper dies, or the demolition
+    // completes and destroys the target outright.
+    demolishTargetId: null,
+    beingDemolished: false,
+    demolisherId: null,
+    demolishProgress: 0
   };
 }
 
@@ -4879,6 +4882,7 @@ function issueMoveOrder(t, x, y, suppressAutoEngage) {
   // cancelAnyFieldRepairInvolving), per "the player can stop the repair by
   // giving it another order".
   cancelAnyFieldRepairInvolving(t);
+  cancelAnyDemolishInvolving(t); // a move order is a fresh command for demolish too, same reasoning as repair above
   t.attackTarget = null;
   t.autoEngaged = false;
   t.holdEngage = !!suppressAutoEngage;
@@ -5319,6 +5323,92 @@ function updateFieldRepairs(dt) {
   });
 }
 
+const SAPPER_DEMOLISH_RANGE = SAPPER_REPAIR_RANGE; // same working distance as repair
+const DEMOLISH_TIME = 4; // seconds of "planting charges" before the target is destroyed
+
+// Same cancel-on-any-fresh-order pattern as cancelAnyFieldRepairInvolving
+// above, kept as a fully separate function (rather than folding demolish
+// into that one) since a unit could in principle be a repair target and a
+// demolish target of two different Sappers at once, and each ability needs
+// to be independently cancelable without accidentally clearing the other.
+function cancelAnyDemolishInvolving(unit) {
+  if (unit.beingDemolished) {
+    const demolisher = entities.find(s=>s.id===unit.demolisherId);
+    if (demolisher) demolisher.demolishTargetId = null;
+    unit.beingDemolished = false;
+    unit.demolisherId = null;
+  }
+  if (unit.demolishTargetId) {
+    const target = entities.find(e=>e.id===unit.demolishTargetId);
+    if (target) { target.beingDemolished = false; target.demolisherId = null; }
+    unit.demolishTargetId = null;
+  }
+}
+
+function assignDemolish(sapper, target) {
+  // Clears any previous assignment either party was already part of first,
+  // same reasoning as assignFieldRepair.
+  cancelAnyDemolishInvolving(sapper);
+  cancelAnyDemolishInvolving(target);
+  // A unit already being repaired can't simultaneously be demolished (and
+  // vice versa) - the repair would otherwise keep healing a target that's
+  // about to be blown up, which reads as a contradiction to the player.
+  cancelAnyFieldRepairInvolving(target);
+  sapper.demolishTargetId = target.id;
+  sapper.demolishProgress = 0;
+  chaseFieldRepairTarget(sapper, target.x, target.y); // same generic chase-to-position helper repair uses
+  showToast('Sapper moving to demolish target');
+}
+
+function updateDemolitions(dt) {
+  // Pass 1: drive every Sapper currently assigned to demolish someone.
+  entities.forEach(t => {
+    if (t.kind !== 'tank' || !t.alive || !t.demolishTargetId) return;
+    const target = entities.find(e=>e.id===t.demolishTargetId);
+    if (!target || !target.alive || target.team !== t.team) {
+      cancelAnyDemolishInvolving(t);
+      return;
+    }
+    const d = Math.hypot(target.x-t.x, target.y-t.y);
+    if (d > SAPPER_DEMOLISH_RANGE) {
+      if (!t.target || Math.hypot(t.target.x-target.x, t.target.y-target.y) > 30) {
+        chaseFieldRepairTarget(t, target.x, target.y);
+      }
+      t.demolishProgress = 0; // charges reset if the Sapper has to chase a moving target
+      return;
+    }
+    // In range: hold position and plant charges. Same immobilization
+    // treatment as a field repair target - see the beingDemolished freeze
+    // check near the top of updateTank.
+    t.target = null; t.path = null; t.state = 'idle';
+    target.beingDemolished = true;
+    target.demolisherId = t.id;
+    t.demolishProgress = (t.demolishProgress||0) + dt;
+    if (t.demolishProgress >= DEMOLISH_TIME) {
+      // Destroys the target through the normal damage pipeline (same
+      // explosion/wreck treatment as any other kill) rather than duplicating
+      // that death handling here - a damage value this large guarantees
+      // destruction regardless of the target's own armor/HP.
+      damageEntity(target, target.maxHp * 10 + 9999);
+      cancelAnyDemolishInvolving(t);
+    }
+  });
+
+  // Pass 2: safety net - if a unit is still marked beingDemolished but its
+  // Sapper died or the assignment broke some other way, release it rather
+  // than leaving it stuck immobile forever with no one actually working on it.
+  entities.forEach(e => {
+    if (e.kind==='tank' && e.alive && e.beingDemolished) {
+      const demolisher = entities.find(s=>s.id===e.demolisherId);
+      if (!demolisher || !demolisher.alive || demolisher.demolishTargetId !== e.id) {
+        e.beingDemolished = false;
+        e.demolisherId = null;
+      }
+    }
+  });
+}
+
+
 // Purchase a unit for a team if it can afford one; spawns near that team's base.
 // Returns true if the purchase succeeded. unitType defaults to 'tank' for
 // backward compatibility with existing call sites.
@@ -5487,6 +5577,8 @@ let awaitingGroundTarget = false;
 // the target tap arrives.
 let awaitingRepairTarget = false;
 let pendingRepairSappers = [];
+let awaitingDemolishTarget = false;
+let pendingDemolishSappers = [];
 
 function getTanks(team){ return entities.filter(e=>e.kind==='tank' && e.alive && e.team===team); }
 function getAlive(){ return entities.filter(e=>e.alive); }
@@ -5762,6 +5854,23 @@ function handleTap(sx, sy) {
     return;
   }
 
+  // Demolish targeting: same pattern as Repair just above, but any friendly
+  // alive unit or structure is a valid target regardless of its current
+  // health - "useful for bringing down friendly foxholes or barricades that
+  // are no longer needed" is about being unneeded, not about being damaged.
+  if (awaitingDemolishTarget) {
+    awaitingDemolishTarget = false;
+    const target = findTankNear(w.x, w.y, 18/camera.zoom);
+    const sappers = pendingDemolishSappers;
+    pendingDemolishSappers = [];
+    if (!target || target.team !== 'blue') {
+      showToast('Demolish: tap a friendly unit or structure');
+    } else {
+      sappers.forEach(s => { if (s.alive) assignDemolish(s, target); });
+    }
+    return;
+  }
+
   // Check tank hit first (tight radius so tapping near a cluster to move there
   // doesn't accidentally re-select/attack a unit you only grazed)
   const hitTank = findTankNear(w.x, w.y, 18/camera.zoom);
@@ -5879,6 +5988,7 @@ function flashAttackMarker(x,y,isAttack){
 document.getElementById('btnStop').addEventListener('click', ()=>{
   selected.forEach(t=>{
     cancelAnyFieldRepairInvolving(t); // STOP is a fresh order too - releases a Sapper repair assignment in either role, even for an otherwise-immobile deployed unit
+    cancelAnyDemolishInvolving(t); // ...and the same for a demolish assignment
     if (t.permanentlyDeployed) return; // a deployed turret ignores the rest of STOP - it's already stopped, forever
     t.target=null; t.path=null; t.attackTarget=null; t.holdEngage=false; t.defending=false; t.state='idle';
     t.isBuilding=false; t.buildProgress=0; // STOP also abandons an in-progress Foxhole build, same as any fresh order would
@@ -5891,6 +6001,7 @@ document.getElementById('btnDefend').addEventListener('click', ()=>{
   // permanentlyDeployed locks them in place forever (see issueMoveOrder).
   selected.forEach(t=>{
     cancelAnyFieldRepairInvolving(t); // DEFEND is a fresh order too
+    cancelAnyDemolishInvolving(t); // ...and the same for a demolish assignment
     t.target = null;
     t.path = null;
     t.holdEngage = false;
@@ -5947,6 +6058,7 @@ document.getElementById('btnHoldFire').addEventListener('click', ()=>{
   // engage.
   selected.forEach(t=>{
     cancelAnyFieldRepairInvolving(t); // Hold Fire is a fresh order too
+    cancelAnyDemolishInvolving(t); // ...and the same for a demolish assignment
     t.holdFire = true;
     t.attackTarget = null;
     t.autoEngaged = false;
@@ -5987,11 +6099,28 @@ function buildBuildMenu(eligibleUnits) {
   Object.keys(BUILDABLE_STRUCTURES).filter(key => availableKeys.has(key)).forEach(key => {
     const cfg = BUILDABLE_STRUCTURES[key];
     const btn = document.createElement('button');
-    btn.textContent = cfg.label;
+    // Foxhole/Barricade cost nothing but the builder's own time. Turret
+    // costs supply too - "the same cost as producing at home base" - so its
+    // button additionally shows and enforces that price, same as any normal
+    // purchase button elsewhere in the UI.
+    const buildersPreview = eligibleUnits.filter(t => t.alive && !t.permanentlyDeployed && cfg.builtBy.includes(t.unitType));
+    if (cfg.cost) {
+      const team = buildersPreview.length ? buildersPreview[0].team : 'blue';
+      const totalCost = cfg.cost * Math.max(1, buildersPreview.length);
+      btn.textContent = cfg.label + ' (' + totalCost + ')';
+      if (supply[team] < totalCost) btn.disabled = true;
+    } else {
+      btn.textContent = cfg.label;
+    }
     btn.addEventListener('click', ()=>{
       const buildersForThis = eligibleUnits.filter(t => t.alive && !t.permanentlyDeployed && cfg.builtBy.includes(t.unitType));
+      if (!buildersForThis.length) { document.getElementById('buildMenuOverlay').style.display = 'none'; return; } // re-checked at click time, same as before
+      if (cfg.cost) {
+        const team = buildersForThis[0].team;
+        const totalCost = cfg.cost * buildersForThis.length;
+        if (supply[team] < totalCost) { showToast('Not enough supply'); return; }
+      }
       document.getElementById('buildMenuOverlay').style.display = 'none';
-      if (!buildersForThis.length) return; // re-checked at click time, same as before
       startBuildPlacement(key, cfg, buildersForThis);
     });
     container.appendChild(btn);
@@ -6012,6 +6141,20 @@ function buildBuildMenu(eligibleUnits) {
     });
     container.appendChild(btn);
   }
+
+  // Demolish: same ability-not-structure treatment as Repair, using the
+  // awaitingDemolishTarget tap-to-target flow instead (see handleTap).
+  const demolishSappers = eligibleUnits.filter(t => t.alive && !t.permanentlyDeployed && t.unitType === 'sappers');
+  if (demolishSappers.length) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Demolish';
+    btn.addEventListener('click', ()=>{
+      document.getElementById('buildMenuOverlay').style.display = 'none';
+      pendingDemolishSappers = demolishSappers;
+      awaitingDemolishTarget = true;
+    });
+    container.appendChild(btn);
+  }
 }
 document.getElementById('btnBuildMenuCancel').addEventListener('click', ()=>{
   document.getElementById('buildMenuOverlay').style.display = 'none';
@@ -6020,6 +6163,7 @@ document.getElementById('btnAttack').addEventListener('click', ()=>{
   // Attack-move toward center of enemy base if no specific target; simplest: find nearest enemy
   selected.forEach(t=>{
     cancelAnyFieldRepairInvolving(t); // ATTACK is a fresh order too, even for an otherwise-immobile deployed unit
+    cancelAnyDemolishInvolving(t); // ...and the same for a demolish assignment
     // Any explicit ATTACK order wakes a stealth-concealed unit up - "will not
     // move or react until ordered" means an actual order is exactly the
     // thing that should end concealment, same as it does for holdFire below.
@@ -7849,7 +7993,12 @@ function resolveUnitCollisions() {
 // build, now that AT Infantry exists as a counterexample.
 const BUILDABLE_STRUCTURES = {
   foxhole: { label: 'Foxhole', buildTime: 30, builtBy: ['infantry','sappers'] },
-  barricade: { label: 'Barricade', buildTime: 30, builtBy: ['sappers'] }
+  barricade: { label: 'Barricade', buildTime: 30, builtBy: ['sappers'] },
+  // "the same cost as producing at home base" - references UNIT_COSTS.turret
+  // directly rather than a separate hardcoded number, so a balance change to
+  // Turret's normal purchase price automatically applies here too. 30
+  // second build time, same as Foxhole/Barricade.
+  turret: { label: 'Turret', buildTime: 30, builtBy: ['sappers'], cost: UNIT_COSTS.turret }
 };
 function getBuildableStructuresFor(unitType) {
   return Object.entries(BUILDABLE_STRUCTURES).filter(([key,cfg]) => cfg.builtBy.includes(unitType));
@@ -7924,11 +8073,26 @@ function startBuildPlacement(key, cfg, units) {
 
 document.getElementById('btnPlacementConfirm').addEventListener('click', ()=>{
   if (!pendingBuildPlacement) return;
-  const { key, units, x, y } = pendingBuildPlacement;
+  const { key, cfg, units, x, y } = pendingBuildPlacement;
   const radius = placementRadius(key);
   if (!isValidStructurePlacement(x, y, radius, units)) {
     showToast("Can't build there");
     return;
+  }
+  // "the same cost as producing at home base" - charged per builder actually
+  // sent (each ends up constructing and owning its own separate structure,
+  // same as the grid-spread below implies), re-checked here rather than
+  // only when the menu button was first clicked, in case supply changed
+  // while the player was still positioning the ghost.
+  if (cfg.cost) {
+    const aliveUnits = units.filter(t => t.alive);
+    const team = aliveUnits.length ? aliveUnits[0].team : 'blue';
+    const totalCost = cfg.cost * aliveUnits.length;
+    if (supply[team] < totalCost) {
+      showToast('Not enough supply');
+      return;
+    }
+    supply[team] -= totalCost;
   }
   // Multiple builders spread into a small grid around the chosen point
   // (same offset pattern already used for ordinary multi-unit move orders,
@@ -7995,6 +8159,12 @@ function updateTank(t, dt, now) {
   // unit, or its Sapper, a new order). Checked before stealth/auto-engage,
   // same priority as isBuilding above, since both are a complete freeze.
   if (t.beingFieldRepaired) return;
+
+  // Being demolished by a Sapper: same complete freeze as being repaired -
+  // a unit about to be scrapped for parts isn't going anywhere or fighting
+  // back either. Set/cleared by updateDemolitions and
+  // cancelAnyDemolishInvolving.
+  if (t.beingDemolished) return;
 
   // Stealth-concealed Infantry/Scout: completely frozen in place - no
   // movement, no combat, no auto-engage - until the player gives an
@@ -10476,6 +10646,10 @@ function applyLoadedGame(data) {
       e.beingFieldRepaired = false;
       e.fieldRepairerId = null;
       e.repairTargetId = null;
+      e.beingDemolished = false;
+      e.demolisherId = null;
+      e.demolishTargetId = null;
+      e.demolishProgress = 0;
     }
   });
 
@@ -10650,6 +10824,7 @@ function gameLoop(now) {
     updateProduction(dt);
     updateRepair(dt);
     updateFieldRepairs(dt);
+    updateDemolitions(dt);
     entities.forEach(e=>{ if (e.kind==='tank') { e.__preMoveX = e.x; e.__preMoveY = e.y; updateTank(e, dt, now); } });
     resolveUnitCollisions();
     resolveTreeCollisions();
