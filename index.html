@@ -784,7 +784,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 127;
+const GAME_VERSION = 128;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -1029,6 +1029,26 @@ Object.keys(MOUNTAIN_DATA_URIS).forEach(key => {
   img.onload = () => { mountainImageReady[key] = true; };
   img.src = MOUNTAIN_DATA_URIS[key];
   mountainImages[key] = img;
+});
+
+// ---------------------------------------------------------------------------
+// Lakes: 12 real photographic lake images, stamped onto the map individually
+// (see genTerrain's lake-placement section) - unlike mountains, lakes never
+// chain into overlapping ranges, they're each placed on their own. No
+// snowy/bare grouping either, since there's no equivalent visual theme to
+// keep consistent here.
+// ---------------------------------------------------------------------------
+const LAKE_TYPES = [{"key": "lk1", "aspectRatio": 1.3043}, {"key": "lk2", "aspectRatio": 0.8286}, {"key": "lk3", "aspectRatio": 1.4685}, {"key": "lk4", "aspectRatio": 1.0244}, {"key": "lk5", "aspectRatio": 0.9405}, {"key": "lk6", "aspectRatio": 1.0072}, {"key": "lk7", "aspectRatio": 1.05}, {"key": "lk8", "aspectRatio": 2.2105}, {"key": "lk9", "aspectRatio": 1.2651}, {"key": "lk10", "aspectRatio": 0.9714}, {"key": "lk11", "aspectRatio": 0.8238}, {"key": "lk12", "aspectRatio": 0.7738}];
+const LAKE_DATA_URIS = {"lk1": "assets/terrain/lakes/lake_01.png", "lk2": "assets/terrain/lakes/lake_02.png", "lk3": "assets/terrain/lakes/lake_03.png", "lk4": "assets/terrain/lakes/lake_04.png", "lk5": "assets/terrain/lakes/lake_05.png", "lk6": "assets/terrain/lakes/lake_06.png", "lk7": "assets/terrain/lakes/lake_07.png", "lk8": "assets/terrain/lakes/lake_08.png", "lk9": "assets/terrain/lakes/lake_09.png", "lk10": "assets/terrain/lakes/lake_10.png", "lk11": "assets/terrain/lakes/lake_11.png", "lk12": "assets/terrain/lakes/lake_12.png"};
+const LAKE_TYPE_BY_KEY = {};
+LAKE_TYPES.forEach(l => { LAKE_TYPE_BY_KEY[l.key] = l; });
+const lakeImages = {};
+const lakeImageReady = {};
+Object.keys(LAKE_DATA_URIS).forEach(key => {
+  const img = new Image();
+  img.onload = () => { lakeImageReady[key] = true; };
+  img.src = LAKE_DATA_URIS[key];
+  lakeImages[key] = img;
 });
 
 let compounds = [];
@@ -2488,8 +2508,9 @@ let terrainRows = Math.ceil(WORLD.h / TERRAIN_CELL) + 1;
 let mountains = []; // {id,x,y,key,longSide,aspectRatio,rotation,rx,ry,snowy}
 let mountainIdCounter = 0; // local counter (see placeMountainRange) - deliberately NOT the shared nextId()/idCounter, since genTerrain's first call happens before idCounter finishes initializing
 let mountainSolid = new Uint8Array(terrainCols * terrainRows);
-let waterField = new Float32Array(terrainCols * terrainRows);
-let lakeBlobs = [];
+let lakes = []; // {id,x,y,key,longSide,aspectRatio,rotation,rx,ry} - see genTerrain's lake-placement section
+let lakeIdCounter = 0; // local counter, same reasoning as mountainIdCounter - genTerrain's first call predates idCounter's own initialization
+let lakeSolid = new Uint8Array(terrainCols * terrainRows);
 let rivers = [];
 let parkZones = []; // Urban Hell only - see genTerrain's park-zone comment above
 // Road tile system v2: a fixed-size grid of 300x300 world-unit cells
@@ -2805,6 +2826,37 @@ function bakeMountainSolidGrid() {
   });
 }
 
+// Same technique as bakeMountainSolidGrid above, for lakes' own elliptical
+// footprints into their own separate grid (lakeSolid) - kept apart from
+// mountainSolid rather than merged into one shared "impassable" grid,
+// because lakes and mountains differ in one important way: a lake blocks
+// movement but NOT line of sight or weapon fire ("you can fire over them"),
+// so combat code needs to be able to tell the two apart (see
+// isMountainSolidAt vs isLakeSolidAt, and lineBlockedBySight vs
+// lineBlockedByMountain further below).
+function bakeLakeSolidGrid() {
+  lakeSolid.fill(0);
+  lakes.forEach(l => {
+    const maxR = Math.max(l.rx, l.ry);
+    const col0 = Math.max(0, Math.floor((l.x-maxR)/TERRAIN_CELL));
+    const col1 = Math.min(terrainCols-1, Math.ceil((l.x+maxR)/TERRAIN_CELL));
+    const row0 = Math.max(0, Math.floor((l.y-maxR)/TERRAIN_CELL));
+    const row1 = Math.min(terrainRows-1, Math.ceil((l.y+maxR)/TERRAIN_CELL));
+    const cosR = Math.cos(-l.rotation), sinR = Math.sin(-l.rotation);
+    for (let row=row0; row<=row1; row++) {
+      for (let col=col0; col<=col1; col++) {
+        const wx = col*TERRAIN_CELL, wy = row*TERRAIN_CELL;
+        const dx = wx-l.x, dy = wy-l.y;
+        const lx = dx*cosR - dy*sinR;
+        const ly = dx*sinR + dy*cosR;
+        if ((lx*lx)/(l.rx*l.rx) + (ly*ly)/(l.ry*l.ry) <= 1) {
+          lakeSolid[row*terrainCols+col] = 1;
+        }
+      }
+    }
+  });
+}
+
 function genTerrain(seedValue){
   terrainSeed = seedValue;
   let seed = seedValue;
@@ -2812,6 +2864,40 @@ function genTerrain(seedValue){
   const biomeCfg = getBiomeConfig(currentBiome);
 
   mountains = [];
+
+  // "Do not place mountains that restrict or overlap where units spawn near
+  // the home base" - checks the actual edge of a proposed stamp (its own
+  // radius) against a clearance zone around each base start, not just its
+  // center point. Used both when picking where a range/lake STARTS below,
+  // and - critically - per individual stamp inside placeMountainRange
+  // itself, since a multi-stamp range can otherwise wander back toward a
+  // base after starting at a perfectly safe distance (that was the actual
+  // bug before this: only the range's starting point was ever checked).
+  // This is a FIXED distance, not scaled by map size - a unit's own spawn
+  // footprint next to its base is a real, constant size regardless of which
+  // map size was chosen, so shrinking the clearance on Small maps would
+  // just let mountains overlap spawns there instead (that was tried and
+  // measured: it let mountains as close as ~380 units from a base through).
+  // What DOES need to adapt to a smaller map is mountain SIZE, not this
+  // clearance - see maxStampRadiusAt below.
+  const BASE_SPAWN_CLEARANCE = 355;
+  function tooCloseToBase(x, y, radius) {
+    const need = BASE_SPAWN_CLEARANCE + radius;
+    return Math.hypot(x-blueBaseStart.x, y-blueBaseStart.y) < need ||
+           Math.hypot(x-redBaseStart.x, y-redBaseStart.y) < need;
+  }
+  // The largest a stamp centered at (x,y) could be without its own edge
+  // reaching inside BASE_SPAWN_CLEARANCE of either base - lets mountains
+  // near the middle of a tight Small map come out smaller instead of just
+  // failing to place at all, which is what happened before this: the
+  // available room near a base shrinks it whether a stamp gets a chance to
+  // exist there is the wrong trade to make when the alternative is simply
+  // drawing that stamp a bit smaller.
+  function maxStampRadiusAt(x, y) {
+    const distB = Math.hypot(x-blueBaseStart.x, y-blueBaseStart.y);
+    const distR = Math.hypot(x-redBaseStart.x, y-redBaseStart.y);
+    return Math.min(distB, distR) - BASE_SPAWN_CLEARANCE;
+  }
 
   // Places one mountain range (or a single solo peak when count===1):
   // consecutive stamps are offset from the last by less than their combined
@@ -2827,7 +2913,12 @@ function genTerrain(seedValue){
       const key = pool[Math.floor(rnd()*pool.length)];
       const type = MOUNTAIN_TYPE_BY_KEY[key];
       // "vary the size of the mountains to create interesting combinations"
-      const longSide = 200 + rnd()*260;
+      // - clamped so a stamp landing near a base's clearance zone shrinks
+      // to fit rather than getting rejected outright (see maxStampRadiusAt).
+      const availableRadius = maxStampRadiusAt(px, py);
+      if (availableRadius < 55) break; // no room here even for a small mountain - stop the range
+      const maxLongSide = Math.min(460, availableRadius/0.46);
+      const longSide = Math.min(maxLongSide, 200 + rnd()*260);
       const rotation = rnd()*Math.PI*2;
       let w, h;
       if (type.aspectRatio >= 1) { w = longSide; h = longSide/type.aspectRatio; }
@@ -2875,10 +2966,7 @@ function genTerrain(seedValue){
       cx = 500 + rnd()*(WORLD.w-1000);
       cy = 400 + rnd()*(WORLD.h-800);
       tries++;
-    } while (tries<20 && (
-      Math.hypot(cx-blueBaseStart.x, cy-blueBaseStart.y) < 420 ||
-      Math.hypot(cx-redBaseStart.x, cy-redBaseStart.y) < 420
-    ));
+    } while (tries<20 && tooCloseToBase(cx, cy, 80));
     // Roughly 1 in 4 ranges is just a single solo peak - "add some
     // mountains singularly" - the rest form a proper multi-stamp range.
     const count = rnd() < 0.25 ? 1 : (2 + Math.floor(rnd()*4)); // 1, or 2-5
@@ -2914,68 +3002,72 @@ function genTerrain(seedValue){
     // still keep clear of base start zones, same as interior ranges - an
     // edge mountain landing right on top of a player's spawn would be a
     // real problem, not just a cosmetic one
-    if (Math.hypot(cx-blueBaseStart.x, cy-blueBaseStart.y) < 420) continue;
-    if (Math.hypot(cx-redBaseStart.x, cy-redBaseStart.y) < 420) continue;
+    if (tooCloseToBase(cx, cy, 80)) continue;
 
     const count = 3 + Math.floor(rnd()*3); // 3-5 - edge ranges are always a proper multi-stamp range
     placeMountainRange(cx, cy, count, biomeCfg.mountainGapMultiplier);
   }
 
   // ---------------------------------------------------------------------------
-  // Lakes: impassable bodies of water, generated the same blob-cluster way
-  // mountains used to be (a handful of overlapping circles per lake, rather
-  // than one perfect circle, so the shoreline reads as natural/irregular).
-  // Kept in a separate lakeBlobs array/waterField rather than folding into
-  // the mountains list - a lake blocks movement exactly like a mountain
-  // does, but needs to be independently distinguishable for rendering (blue
-  // water vs the real rock images) and so rivers can specifically check
-  // "does this river reach a lake" without also matching mountains.
-  // Three size tiers per the design (small/medium/large), and - like
-  // mountains - a separate pass of additional lakes deliberately centered on
-  // or past the map edge, so a lake can be "cropped off the side of a map"
-  // the same way an edge mountain range is.
   // ---------------------------------------------------------------------------
-  lakeBlobs = [];
-  waterField.fill(0);
+  // Lakes: real photographic images (see LAKE_TYPES), each placed
+  // individually - "they do not overlap like mountains, they are placed
+  // individually" - so unlike placeMountainRange there's no chaining of
+  // multiple stamps into one connected mass; every lake here is exactly one
+  // stamp, picked from its own size tier (small/medium/large, same idea as
+  // before). Also gets the same "additional pass centered on/past the map
+  // edge" treatment mountains use, so a lake can be "cropped off the side
+  // of a map" too.
+  // ---------------------------------------------------------------------------
+  lakes = [];
   const LAKE_SIZE_TIERS = [
-    { label: 'small',  blobCount: [2,3], blobR: [50,90] },
-    { label: 'medium', blobCount: [3,5], blobR: [80,140] },
-    { label: 'large',  blobCount: [5,7], blobR: [120,200] },
+    { label: 'small',  longSide: [180,300] },
+    { label: 'medium', longSide: [300,440] },
+    { label: 'large',  longSide: [420,600] },
   ];
   function overlapsExistingLake(x, y, pad) {
-    return lakeBlobs.some(l => Math.hypot(l.x-x, l.y-y) < l.r+pad);
+    return lakes.some(l => Math.hypot(l.x-x, l.y-y) < Math.max(l.rx,l.ry)+pad);
+  }
+  function placeLake(cx, cy) {
+    // Same "shrink to fit near a base rather than refuse to place at all"
+    // approach as maxStampRadiusAt for mountains - see that comment for why
+    // this is a size cap, not a clearance change.
+    const availableRadius = maxStampRadiusAt(cx, cy);
+    if (availableRadius < 45) return null; // no room here even for a tiny lake
+    const tier = LAKE_SIZE_TIERS[Math.floor(rnd()*LAKE_SIZE_TIERS.length)];
+    const key = LAKE_TYPES[Math.floor(rnd()*LAKE_TYPES.length)].key;
+    const type = LAKE_TYPE_BY_KEY[key];
+    const [minL,maxL] = tier.longSide;
+    const maxLongSide = Math.min(maxL, availableRadius/0.46);
+    if (maxLongSide < minL*0.5) return null; // this tier doesn't reasonably fit here even shrunk
+    const longSide = Math.min(maxLongSide, minL + rnd()*(maxL-minL));
+    const rotation = rnd()*Math.PI*2;
+    let w, h;
+    if (type.aspectRatio >= 1) { w = longSide; h = longSide/type.aspectRatio; }
+    else { h = longSide; w = longSide*type.aspectRatio; }
+    const rx = (w/2)*0.92, ry = (h/2)*0.92;
+    lakes.push({ id: ++lakeIdCounter, x: cx, y: cy, key, longSide, aspectRatio: type.aspectRatio, rotation, rx, ry });
+    return { x: cx, y: cy };
   }
 
   const [minInteriorLakes,maxInteriorLakes] = biomeCfg.lakeInteriorCount;
   const interiorLakeCount = minInteriorLakes + Math.floor(rnd()*(maxInteriorLakes-minInteriorLakes+1));
-  const placedLakeCenters = []; // tracked so rivers can later be steered toward one of these as an outlet
+  const placedLakeCenters = []; // tracked so rivers can later be steered toward one of these as an outlet, and so Urban Hell's park zones (below) can anchor on them
   for (let i=0; i<interiorLakeCount; i++) {
-    const tier = LAKE_SIZE_TIERS[Math.floor(rnd()*LAKE_SIZE_TIERS.length)];
     let cx, cy, tries=0, placed=false;
     do {
       cx = 400 + rnd()*(WORLD.w-800);
       cy = 350 + rnd()*(WORLD.h-700);
       tries++;
       if (
-        Math.hypot(cx-blueBaseStart.x, cy-blueBaseStart.y) >= 450 &&
-        Math.hypot(cx-redBaseStart.x, cy-redBaseStart.y) >= 450 &&
-        !overlapsExistingMountain(cx, cy, 150)
+        !tooCloseToBase(cx, cy, 60) &&
+        !overlapsExistingMountain(cx, cy, 150) &&
+        !overlapsExistingLake(cx, cy, 150)
       ) { placed = true; break; }
     } while (tries<25);
     if (!placed) continue;
-
-    const [minB,maxB] = tier.blobCount, [minR,maxR] = tier.blobR;
-    const blobCount = minB + Math.floor(rnd()*(maxB-minB+1));
-    for (let b=0;b<blobCount;b++) {
-      lakeBlobs.push({
-        x: cx + (rnd()*2-1)*(maxR*0.5),
-        y: cy + (rnd()*2-1)*(maxR*0.5),
-        r: minR + rnd()*(maxR-minR),
-        tier: tier.label,
-        lakeId: 'interior'+i // groups this blob with the others belonging to the SAME lake, so drawLakes can union just this lake's own circles into one smooth shape rather than potentially bridging to an unrelated lake elsewhere that just happens to be nearby in the array
-      });
-    }
-    placedLakeCenters.push({x: cx, y: cy, tier: tier.label});
+    const center = placeLake(cx, cy);
+    if (center) placedLakeCenters.push(center);
   }
 
   // Edge-cropped lakes, same "centered on/past the boundary" technique as
@@ -2983,7 +3075,6 @@ function genTerrain(seedValue){
   const [minEdgeLakes,maxEdgeLakes] = biomeCfg.lakeEdgeCount;
   const edgeLakeCount = minEdgeLakes + Math.floor(rnd()*(maxEdgeLakes-minEdgeLakes+1));
   for (let i=0; i<edgeLakeCount; i++) {
-    const tier = LAKE_SIZE_TIERS[Math.floor(rnd()*LAKE_SIZE_TIERS.length)];
     const edge = Math.floor(rnd()*4);
     const along = rnd();
     const pushOut = 40 + rnd()*60;
@@ -2993,22 +3084,12 @@ function genTerrain(seedValue){
     else if (edge === 2) { cx = -pushOut; cy = along*WORLD.h; }
     else { cx = WORLD.w+pushOut; cy = along*WORLD.h; }
 
-    if (Math.hypot(cx-blueBaseStart.x, cy-blueBaseStart.y) < 450) continue;
-    if (Math.hypot(cx-redBaseStart.x, cy-redBaseStart.y) < 450) continue;
+    if (tooCloseToBase(cx, cy, 60)) continue;
     if (overlapsExistingMountain(cx, cy, 100)) continue;
+    if (overlapsExistingLake(cx, cy, 100)) continue;
 
-    const [minB,maxB] = tier.blobCount, [minR,maxR] = tier.blobR;
-    const blobCount = minB + Math.floor(rnd()*(maxB-minB+1));
-    for (let b=0;b<blobCount;b++) {
-      lakeBlobs.push({
-        x: cx + (rnd()*2-1)*(maxR*0.5),
-        y: cy + (rnd()*2-1)*(maxR*0.5),
-        r: minR + rnd()*(maxR-minR),
-        tier: tier.label,
-        lakeId: 'edge'+i
-      });
-    }
-    placedLakeCenters.push({x: cx, y: cy, tier: tier.label});
+    const center = placeLake(cx, cy);
+    if (center) placedLakeCenters.push(center);
   }
 
   // Urban Hell park zones: "green Park areas with trees and lakes" - every
@@ -3025,18 +3106,7 @@ function genTerrain(seedValue){
     : [];
 
   bakeMountainSolidGrid();
-
-  for (let row=0; row<terrainRows; row++) {
-    for (let col=0; col<terrainCols; col++) {
-      const wx = col*TERRAIN_CELL, wy = row*TERRAIN_CELL;
-      let w = 0;
-      for (const l of lakeBlobs) {
-        const d = Math.hypot(wx-l.x, wy-l.y);
-        w += Math.max(0, 1 - d/l.r);
-      }
-      waterField[row*terrainCols+col] = w;
-    }
-  }
+  bakeLakeSolidGrid();
 
   // ---------------------------------------------------------------------------
   // Rivers removed per request ("remove rivers from the maps - it's not
@@ -3094,10 +3164,10 @@ function genTerrain(seedValue){
               Math.max(0, Math.min(terrainRows-1, Math.round(wy/TERRAIN_CELL))) * terrainCols +
               Math.max(0, Math.min(terrainCols-1, Math.round(wx/TERRAIN_CELL)))
             ] === 1 ||
-            waterField[
+            lakeSolid[
               Math.max(0, Math.min(terrainRows-1, Math.round(wy/TERRAIN_CELL))) * terrainCols +
               Math.max(0, Math.min(terrainCols-1, Math.round(wx/TERRAIN_CELL)))
-            ] >= 0.5
+            ] === 1
           ) return true;
         }
       }
@@ -3131,42 +3201,35 @@ function genTerrain(seedValue){
 }
 genTerrain(terrainSeed);
 
-const LAKE_THRESHOLD = 0.5; // water-field value above this = impassable lake
-
 function isMountainSolidAt(x, y) {
   const col = Math.max(0, Math.min(terrainCols-1, Math.round(x/TERRAIN_CELL)));
   const row = Math.max(0, Math.min(terrainRows-1, Math.round(y/TERRAIN_CELL)));
   return mountainSolid[row*terrainCols+col] === 1;
 }
-function terrainWaterAt(x, y) {
+function isLakeSolidAt(x, y) {
   const col = Math.max(0, Math.min(terrainCols-1, Math.round(x/TERRAIN_CELL)));
   const row = Math.max(0, Math.min(terrainRows-1, Math.round(y/TERRAIN_CELL)));
-  return waterField[row*terrainCols+col];
+  return lakeSolid[row*terrainCols+col] === 1;
 }
-// Deliberately named isMountain (not renamed to something more generic like
-// isImpassableTerrain) despite now also covering lakes - this function is
-// already the single choke point every piece of pathfinding, combat line-
-// of-sight, and placement logic in the file calls to ask "is this spot
-// blocked", and none of those callers actually need to distinguish WHICH
-// kind of impassable terrain they hit, only THAT they hit one. Renaming it
-// (or adding a parallel isLake check that every one of those call sites
-// would also need updating to include) would be a much larger and riskier
-// change for no behavioral benefit - rendering is the only place that
-// genuinely needs to tell rock apart from water, and it calls
-// terrainWaterAt/isLakeAt directly instead of this function.
+// isMountain is the single choke point every piece of pathfinding, unit
+// collision, and placement logic in the file calls to ask "is this spot
+// impassable to walk through" - both mountains and lakes count, since both
+// block movement equally. Combat is the one exception: "lakes do not
+// restrict line of sight or weapon fire - you can fire over them" - so
+// sight/fire checks use lineBlockedBySight instead (see below), which only
+// tests isMountainSolidAt, deliberately leaving lakes out.
 function isMountain(x, y) {
   if (appState === 'test') return false; // test arena is always fully open, regardless of the underlying terrain seed
   if (x<0||y<0||x>WORLD.w||y>WORLD.h) return true;
-  return isMountainSolidAt(x,y) || terrainWaterAt(x,y) >= LAKE_THRESHOLD;
+  return isMountainSolidAt(x,y) || isLakeSolidAt(x,y);
 }
 // Rendering-only check for whether a given point is specifically a LAKE
-// (not a mountain) - used so the shoreline/water fill can be drawn in the
-// right color without needing to duplicate isMountain's full logic or risk
-// misclassifying a mountain cell as water.
+// (not a mountain) - kept for anything that wants to tell the two apart
+// without duplicating isMountain's own logic.
 function isLakeAt(x, y) {
   if (appState === 'test') return false;
   if (x<0||y<0||x>WORLD.w||y>WORLD.h) return false; // out-of-bounds is handled by isMountain's own bounds check; this function only answers "is this in-bounds point a lake"
-  return terrainWaterAt(x,y) >= LAKE_THRESHOLD;
+  return isLakeSolidAt(x,y);
 }
 
 // Rivers are NOT part of the impassable-terrain system (see the comment on
@@ -3459,6 +3522,30 @@ function genTrees(seedValue) {
     });
   }
   plantMountainRingTrees();
+
+  // "Place trees around lakes" - same ring technique as mountains just
+  // above, hugging the outside edge of every lake's own elliptical
+  // footprint (see placeLake in genTerrain). Every candidate point still
+  // goes through tryPlaceTree, so it's rejected exactly like any other tree
+  // if it happens to land on the lake itself, on a road, on a mountain, on
+  // another lake, or too close to a base start - this only supplies the
+  // candidate ring positions.
+  function plantLakeRingTrees() {
+    lakes.forEach(l => {
+      const treeCount = Math.max(8, Math.round((l.rx + l.ry) / 9));
+      const cosR = Math.cos(l.rotation), sinR = Math.sin(l.rotation);
+      for (let i=0;i<treeCount;i++) {
+        const theta = rnd()*Math.PI*2;
+        const margin = 12 + rnd()*45;
+        const lx = Math.cos(theta)*(l.rx+margin);
+        const ly = Math.sin(theta)*(l.ry+margin);
+        const x = l.x + lx*cosR - ly*sinR;
+        const y = l.y + lx*sinR + ly*cosR;
+        tryPlaceTree(x, y);
+      }
+    });
+  }
+  plantLakeRingTrees();
 
   // Solitary trees and small groups, scattered generally across the map -
   // only for the "scattered" tree style (Desert/Ice/Urban's own scattered
@@ -4361,6 +4448,22 @@ function lineBlockedByMountain(x0,y0,x1,y1) {
   }
   return false;
 }
+// Sight/weapon-fire version of the check above - "lakes do not restrict
+// line of sight or weapon fire, you can fire over them", unlike movement
+// (lineBlockedByMountain), which treats a lake as just as impassable as a
+// mountain. Only tests isMountainSolidAt (real rock), deliberately leaving
+// lakes out, so a unit on one shore can freely see and shoot at a target
+// across the water.
+function lineBlockedBySight(x0,y0,x1,y1) {
+  const dist = Math.hypot(x1-x0, y1-y0);
+  const steps = Math.max(1, Math.ceil(dist / (TERRAIN_CELL*0.5)));
+  for (let i=1;i<steps;i++) {
+    const t = i/steps;
+    const x = x0+(x1-x0)*t, y = y0+(y1-y0)*t;
+    if (isMountainSolidAt(x,y)) return true;
+  }
+  return false;
+}
 // Find nearest non-mountain point to a proposed position (simple push-out), used to stop units at mountain edges
 function resolveMountainCollision(t, oldX, oldY) {
   if (isMountain(t.x, t.y)) {
@@ -4558,6 +4661,7 @@ function applyMapSize(sizeKey, randomizeCorners=true) {
   terrainCols = Math.ceil(WORLD.w / TERRAIN_CELL) + 1;
   terrainRows = Math.ceil(WORLD.h / TERRAIN_CELL) + 1;
   mountainSolid = new Uint8Array(terrainCols * terrainRows);
+  lakeSolid = new Uint8Array(terrainCols * terrainRows);
 
   navCols = Math.ceil(WORLD.w / NAV_CELL) + 1;
   navRows = Math.ceil(WORLD.h / NAV_CELL) + 1;
@@ -6217,7 +6321,7 @@ function findNearestEnemyInSight(t) {
     // own.
     const detectionRange = getDetectionRangeFor(e);
     const effectiveSight = detectionRange !== null ? detectionRange : t.sight;
-    if (d <= effectiveSight && d<bd && !lineBlockedByMountain(t.x,t.y,e.x,e.y)) {
+    if (d <= effectiveSight && d<bd && !lineBlockedBySight(t.x,t.y,e.x,e.y)) {
       bd = d; best = e;
     }
   });
@@ -7920,7 +8024,7 @@ function updateTank(t, dt, now) {
       // chase, so letting them hold a target all the way out to react range
       // would leave them permanently locked onto something they can never
       // reach; for those units, only direct sight keeps a target valid.
-      const directSight = d <= t.sight && !lineBlockedByMountain(t.x,t.y,t.attackTarget.x,t.attackTarget.y);
+      const directSight = d <= t.sight && !lineBlockedBySight(t.x,t.y,t.attackTarget.x,t.attackTarget.y);
       const withinReact = t.canFireWhileMoving && d <= t.react;
       const inSight = directSight || withinReact;
 
@@ -7949,7 +8053,7 @@ function updateTank(t, dt, now) {
         // other unit type has no minRange field at all, so this defaults to 0
         // (no minimum) and never affects them.
         const minRange = t.minRange || 0;
-        const canFire = d <= t.range && d >= minRange && !lineBlockedByMountain(t.x,t.y,t.attackTarget.x,t.attackTarget.y);
+        const canFire = d <= t.range && d >= minRange && !lineBlockedBySight(t.x,t.y,t.attackTarget.x,t.attackTarget.y);
         // Units that can't fire while moving (per their stat table) never close
         // distance on a target - they hold ground and wait for something to come
         // into range, since advancing would only delay them further from ever
@@ -9929,14 +10033,14 @@ function serializeGame() {
     worldW: WORLD.w, worldH: WORLD.h,
     // Save the actual generated terrain rather than relying solely on the seed.
     // This preserves the exact mountains/lakes/rivers/park layout even if
-    // terrain generation code changes in a later game version. Mountains are
-    // saved as the placed stamp list itself (mountainSolid is never saved
-    // directly - it's cheaply rebaked from this list on load, see
-    // applyLoadedGame/bakeMountainSolidGrid).
+    // terrain generation code changes in a later game version. Mountains and
+    // lakes are both saved as their placed stamp lists (mountainSolid/
+    // lakeSolid are never saved directly - they're cheaply rebaked from
+    // these lists on load, see applyLoadedGame/bakeMountainSolidGrid/
+    // bakeLakeSolidGrid).
     terrainCols, terrainRows,
     mountains: mountains.map(m => Object.assign({}, m)),
-    waterField: Array.from(waterField),
-    lakeBlobs: lakeBlobs.map(l => Object.assign({}, l)),
+    lakes: lakes.map(l => Object.assign({}, l)),
     rivers: rivers.map(r => Object.assign({}, r)),
     parkZones: parkZones.map(z => Object.assign({}, z)),
     // Roads are actual map tiles, so preserve the exact tile/rotation layout
@@ -10154,6 +10258,7 @@ function applyLoadedGame(data) {
     terrainCols = Math.ceil(WORLD.w / TERRAIN_CELL) + 1;
     terrainRows = Math.ceil(WORLD.h / TERRAIN_CELL) + 1;
     mountainSolid = new Uint8Array(terrainCols * terrainRows);
+    lakeSolid = new Uint8Array(terrainCols * terrainRows);
     navCols = Math.ceil(WORLD.w / NAV_CELL) + 1;
     navRows = Math.ceil(WORLD.h / NAV_CELL) + 1;
     navBlocked = new Uint8Array(navCols * navRows);
@@ -10203,7 +10308,7 @@ function applyLoadedGame(data) {
   // and mountainSolid is cheaply rebaked from it here, rather than saved
   // directly - the same "regenerate the derived lookup grid, don't bother
   // persisting it" approach fog/nav grids already use.
-  if (Array.isArray(data.waterField) && Array.isArray(data.lakeBlobs)) {
+  if (Array.isArray(data.roadGrid)) {
     terrainCols = Number(data.terrainCols) || terrainCols;
     terrainRows = Number(data.terrainRows) || terrainRows;
     // Old saves made before this mountain rewrite have no `mountains` array
@@ -10213,11 +10318,15 @@ function applyLoadedGame(data) {
     mountains = Array.isArray(data.mountains) ? data.mountains.map(m => Object.assign({}, m)) : [];
     mountainSolid = new Uint8Array(terrainCols * terrainRows);
     bakeMountainSolidGrid();
-    waterField = new Float32Array(data.waterField);
-    lakeBlobs = data.lakeBlobs.map(l => Object.assign({}, l));
+    // Same reasoning for lakes - saves from before this lake rewrite used a
+    // since-removed blob/water-field format with no real stamp placements
+    // to recover, so they simply come back with no lakes.
+    lakes = Array.isArray(data.lakes) ? data.lakes.map(l => Object.assign({}, l)) : [];
+    lakeSolid = new Uint8Array(terrainCols * terrainRows);
+    bakeLakeSolidGrid();
     rivers = Array.isArray(data.rivers) ? data.rivers.map(r => Object.assign({}, r)) : [];
     parkZones = Array.isArray(data.parkZones) ? data.parkZones.map(z => Object.assign({}, z)) : [];
-    roadGrid = Array.isArray(data.roadGrid) ? data.roadGrid.map(r => Object.assign({}, r)) : [];
+    roadGrid = data.roadGrid.map(r => Object.assign({}, r));
     roadGridCells = new Set(Array.isArray(data.roadGridCells) ? data.roadGridCells :
       roadGrid.map(r => roadCellKey(r.col, r.row)));
     buildNavGrid();
@@ -11243,78 +11352,31 @@ function drawMountains() {
   });
 }
 
-// Lakes: each lake is rendered as a smooth union of its own constituent
-// blob circles (the same circles genTerrain used to build the water field
-// in the first place - see lakeId grouping there), rather than the grid-
-// cell fillRect approach this used previously. Drawing actual circles
-// produces genuinely smooth, curved shoreline edges "for free" (a circle
-// has no blocky edges to begin with), whereas the old approach rasterized
-// the lake onto the same coarse TERRAIN_CELL grid mountains use, which
-// reads fine for jagged rock but looked visibly blocky for water, where a
-// smooth edge is the more natural expectation. Blobs sharing one lakeId are
-// drawn as a single compound Path2D and filled once, so overlapping circles
-// within the same lake merge into one seamless shape instead of each circle
-// being a separately-outlined layer.
+// Lakes: each placed stamp (see placeLake in genTerrain) is just its real
+// source image drawn at its own position/rotation/size - replacing the old
+// blob-circle-union renderer entirely, the same swap drawMountains already
+// made for mountains. Sorted by world Y before drawing for the same simple
+// painter's-algorithm depth reasoning as mountains, in case two lakes ever
+// happen to sit close enough to overlap in screen space at the edges.
 function drawLakes() {
-  if (!lakeBlobs.length) return;
-  const topLeft = screenToWorld(0,0);
-  const botRight = screenToWorld(viewportWidth(), viewportHeight());
-  const margin = 250; // generous world-unit margin so a lake straddling the viewport edge doesn't get skipped or clipped early
-  const visible = lakeBlobs.filter(b =>
-    b.x+b.r > topLeft.x-margin && b.x-b.r < botRight.x+margin &&
-    b.y+b.r > topLeft.y-margin && b.y-b.r < botRight.y+margin
-  );
-  if (!visible.length) return;
-
-  // Group by lakeId (falling back to treating each blob as its own group
-  // for any legacy/loaded data that predates the lakeId field, so an older
-  // save doesn't error out - it just won't union blobs that should belong
-  // together, which is a minor cosmetic seam at worst, not a crash).
-  const groups = {};
-  visible.forEach(b => {
-    const key = b.lakeId || ('__ungrouped'+b.x+'_'+b.y);
-    (groups[key] = groups[key] || []).push(b);
+  if (!lakes.length) return;
+  const topLeft = screenToWorld(-100, -100);
+  const botRight = screenToWorld(viewportWidth()+100, viewportHeight()+100);
+  const visible = lakes.filter(l => {
+    const maxR = Math.max(l.rx, l.ry);
+    return l.x+maxR >= topLeft.x && l.x-maxR <= botRight.x &&
+           l.y+maxR >= topLeft.y && l.y-maxR <= botRight.y;
   });
-
-  Object.values(groups).forEach(blobs => {
-    // Shoreline ring: the same group of circles, each expanded slightly in
-    // radius and drawn first/underneath, giving a soft darker band around
-    // the water's actual edge - same visual role the old per-cell shoreline
-    // ring served, now following the smooth circle outlines instead of a
-    // stepped grid boundary.
-    const shorePath = new Path2D();
-    blobs.forEach(b => {
-      const s = worldToScreen(b.x, b.y);
-      shorePath.moveTo(s.x + (b.r+14)*camera.zoom, s.y);
-      shorePath.arc(s.x, s.y, (b.r+14)*camera.zoom, 0, Math.PI*2);
-    });
-    ctx.fillStyle = PALETTE.lakeShoreline;
-    ctx.fill(shorePath);
-
-    const waterPath = new Path2D();
-    blobs.forEach(b => {
-      const s = worldToScreen(b.x, b.y);
-      waterPath.moveTo(s.x + b.r*camera.zoom, s.y);
-      waterPath.arc(s.x, s.y, b.r*camera.zoom, 0, Math.PI*2);
-    });
-    ctx.fillStyle = PALETTE.lakeWater;
-    ctx.fill(waterPath);
-
-    // Subtle highlight near the "top" of the water body (offset up-left),
-    // echoing the river's flow-highlight treatment so lakes and rivers read
-    // as visually related bodies of water rather than two unrelated
-    // rendering styles - a soft lighter patch rather than a hard shape, so
-    // it doesn't fight with the smooth circular edges just established.
+  if (!visible.length) return;
+  visible.sort((a,b) => a.y - b.y);
+  visible.forEach(l => {
+    const img = lakeImages[l.key];
+    if (!img || !lakeImageReady[l.key] || !img.naturalWidth) return;
+    const s = worldToScreen(l.x, l.y);
     ctx.save();
-    ctx.globalAlpha = 0.25;
-    ctx.fillStyle = PALETTE.lakeWaterDark ? shadeHexColor(PALETTE.lakeWater, 25) : PALETTE.lakeWater;
-    blobs.forEach(b => {
-      const s = worldToScreen(b.x - b.r*0.3, b.y - b.r*0.3);
-      const hr = b.r*0.5*camera.zoom;
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, hr, 0, Math.PI*2);
-      ctx.fill();
-    });
+    ctx.translate(s.x, s.y);
+    ctx.rotate(l.rotation);
+    drawSpriteAspectFit(img, l.longSide*camera.zoom);
     ctx.restore();
   });
 }
