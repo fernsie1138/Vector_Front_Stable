@@ -784,7 +784,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 130;
+const GAME_VERSION = 131;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -1049,6 +1049,28 @@ Object.keys(LAKE_DATA_URIS).forEach(key => {
   img.onload = () => { lakeImageReady[key] = true; };
   img.src = LAKE_DATA_URIS[key];
   lakeImages[key] = img;
+});
+
+// ---------------------------------------------------------------------------
+// Crevasses: 9 dark-gash ice-crack images, replacing lakes entirely on the
+// Ice biome (see genTerrain's biome branch in the lake/crevasse placement
+// section). Same placement rules as lakes - individually placed (never
+// overlapping each other), impassable, but do NOT block line of sight or
+// weapon fire ("units can fire over them", same as lakes) - and just like
+// the "do not scale lakes" rule, crevasses use one fixed size and vary only
+// by rotation, not scale.
+// ---------------------------------------------------------------------------
+const CREVASSE_TYPES = [{"key": "cv1", "aspectRatio": 0.6}, {"key": "cv2", "aspectRatio": 0.7}, {"key": "cv3", "aspectRatio": 0.5585}, {"key": "cv4", "aspectRatio": 0.4024}, {"key": "cv5", "aspectRatio": 0.5524}, {"key": "cv6", "aspectRatio": 0.9881}, {"key": "cv7", "aspectRatio": 1.9309}, {"key": "cv8", "aspectRatio": 0.9476}, {"key": "cv9", "aspectRatio": 0.9714}];
+const CREVASSE_DATA_URIS = {"cv1": "assets/terrain/crevasses/cv_01.png", "cv2": "assets/terrain/crevasses/cv_02.png", "cv3": "assets/terrain/crevasses/cv_03.png", "cv4": "assets/terrain/crevasses/cv_04.png", "cv5": "assets/terrain/crevasses/cv_05.png", "cv6": "assets/terrain/crevasses/cv_06.png", "cv7": "assets/terrain/crevasses/cv_07.png", "cv8": "assets/terrain/crevasses/cv_08.png", "cv9": "assets/terrain/crevasses/cv_09.png"};
+const CREVASSE_TYPE_BY_KEY = {};
+CREVASSE_TYPES.forEach(c => { CREVASSE_TYPE_BY_KEY[c.key] = c; });
+const crevasseImages = {};
+const crevasseImageReady = {};
+Object.keys(CREVASSE_DATA_URIS).forEach(key => {
+  const img = new Image();
+  img.onload = () => { crevasseImageReady[key] = true; };
+  img.src = CREVASSE_DATA_URIS[key];
+  crevasseImages[key] = img;
 });
 
 let compounds = [];
@@ -1637,7 +1659,7 @@ function computeFortressCityCenterZone() {
 // ---------------------------------------------------------------------------
 const ICE_TILE_SIZE = 300;
 const ICE_ATLAS_GRID = 6;
-const iceTileSources = ["assets/terrain/ice_tiles/tile_00.png", "assets/terrain/ice_tiles/tile_01.png", "assets/terrain/ice_tiles/tile_02.png", "assets/terrain/ice_tiles/tile_03.png", "assets/terrain/ice_tiles/tile_04.png", "assets/terrain/ice_tiles/tile_05.png", "assets/terrain/ice_tiles/tile_06.png", "assets/terrain/ice_tiles/tile_07.png", "assets/terrain/ice_tiles/tile_08.png"];
+const iceTileSources = ["assets/terrain/ice_tiles/tile_00_v2.png", "assets/terrain/ice_tiles/tile_01_v2.png", "assets/terrain/ice_tiles/tile_02_v2.png", "assets/terrain/ice_tiles/tile_03_v2.png", "assets/terrain/ice_tiles/tile_04_v2.png", "assets/terrain/ice_tiles/tile_05_v2.png", "assets/terrain/ice_tiles/tile_06_v2.png", "assets/terrain/ice_tiles/tile_07_v2.png", "assets/terrain/ice_tiles/tile_08_v2.png"];
 const iceTileImages = iceTileSources.map(src => {
   const img = new Image();
   img.decoding = 'async';
@@ -2511,6 +2533,9 @@ let mountainSolid = new Uint8Array(terrainCols * terrainRows);
 let lakes = []; // {id,x,y,key,longSide,aspectRatio,rotation,rx,ry} - see genTerrain's lake-placement section
 let lakeIdCounter = 0; // local counter, same reasoning as mountainIdCounter - genTerrain's first call predates idCounter's own initialization
 let lakeSolid = new Uint8Array(terrainCols * terrainRows);
+let crevasses = []; // {id,x,y,key,longSide,aspectRatio,rotation,rx,ry} - Ice-biome-only replacement for lakes, see genTerrain
+let crevasseIdCounter = 0;
+let crevasseSolid = new Uint8Array(terrainCols * terrainRows);
 let rivers = [];
 let parkZones = []; // Urban Hell only - see genTerrain's park-zone comment above
 // Road tile system v2: a fixed-size grid of 300x300 world-unit cells
@@ -2857,6 +2882,31 @@ function bakeLakeSolidGrid() {
   });
 }
 
+// Same technique again for crevasses (their own grid, same reasoning as
+// lakeSolid above - impassable but not sight/fire-blocking).
+function bakeCrevasseSolidGrid() {
+  crevasseSolid.fill(0);
+  crevasses.forEach(c => {
+    const maxR = Math.max(c.rx, c.ry);
+    const col0 = Math.max(0, Math.floor((c.x-maxR)/TERRAIN_CELL));
+    const col1 = Math.min(terrainCols-1, Math.ceil((c.x+maxR)/TERRAIN_CELL));
+    const row0 = Math.max(0, Math.floor((c.y-maxR)/TERRAIN_CELL));
+    const row1 = Math.min(terrainRows-1, Math.ceil((c.y+maxR)/TERRAIN_CELL));
+    const cosR = Math.cos(-c.rotation), sinR = Math.sin(-c.rotation);
+    for (let row=row0; row<=row1; row++) {
+      for (let col=col0; col<=col1; col++) {
+        const wx = col*TERRAIN_CELL, wy = row*TERRAIN_CELL;
+        const dx = wx-c.x, dy = wy-c.y;
+        const lx = dx*cosR - dy*sinR;
+        const ly = dx*sinR + dy*cosR;
+        if ((lx*lx)/(c.rx*c.rx) + (ly*ly)/(c.ry*c.ry) <= 1) {
+          crevasseSolid[row*terrainCols+col] = 1;
+        }
+      }
+    }
+  });
+}
+
 function genTerrain(seedValue){
   terrainSeed = seedValue;
   let seed = seedValue;
@@ -3010,16 +3060,16 @@ function genTerrain(seedValue){
 
   // ---------------------------------------------------------------------------
   // ---------------------------------------------------------------------------
-  // Lakes: real photographic images (see LAKE_TYPES), each placed
-  // individually - "they do not overlap like mountains, they are placed
-  // individually" - so unlike placeMountainRange there's no chaining of
-  // multiple stamps into one connected mass; every lake here is exactly one
-  // stamp, picked from its own size tier (small/medium/large, same idea as
-  // before). Also gets the same "additional pass centered on/past the map
-  // edge" treatment mountains use, so a lake can be "cropped off the side
-  // of a map" too.
+  // Lakes (or, for Ice, Crevasses instead - see below): real photographic
+  // images, each placed individually - "they do not overlap like mountains,
+  // they are placed individually" - so unlike placeMountainRange there's no
+  // chaining of multiple stamps into one connected mass; every lake/crevasse
+  // here is exactly one stamp. Also gets the same "additional pass centered
+  // on/past the map edge" treatment mountains use, so one can be "cropped
+  // off the side of a map" too.
   // ---------------------------------------------------------------------------
   lakes = [];
+  crevasses = [];
   const LAKE_LONG_SIDE = 320; // fixed - "do not scale the size of lakes, but rotate them randomly"
   function overlapsExistingLake(x, y, pad) {
     return lakes.some(l => Math.hypot(l.x-x, l.y-y) < Math.max(l.rx,l.ry)+pad);
@@ -3042,6 +3092,30 @@ function genTerrain(seedValue){
     return { x: cx, y: cy };
   }
 
+  // Crevasses: Ice-biome-only replacement for lakes - "these are to replace
+  // lakes on the ice maps". Same fixed-size-but-rotatable treatment as
+  // lakes, same non-overlapping individual placement, just a different
+  // image pool and its own array/collision grid (see CREVASSE_TYPES,
+  // bakeCrevasseSolidGrid).
+  const CREVASSE_LONG_SIDE = 300; // fixed - "do not scale them, but they can be rotated"
+  function overlapsExistingCrevasse(x, y, pad) {
+    return crevasses.some(c => Math.hypot(c.x-x, c.y-y) < Math.max(c.rx,c.ry)+pad);
+  }
+  function placeCrevasse(cx, cy) {
+    const key = CREVASSE_TYPES[Math.floor(rnd()*CREVASSE_TYPES.length)].key;
+    const type = CREVASSE_TYPE_BY_KEY[key];
+    const rotation = rnd()*Math.PI*2;
+    let w, h;
+    if (type.aspectRatio >= 1) { w = CREVASSE_LONG_SIDE; h = CREVASSE_LONG_SIDE/type.aspectRatio; }
+    else { h = CREVASSE_LONG_SIDE; w = CREVASSE_LONG_SIDE*type.aspectRatio; }
+    const rx = (w/2)*0.92, ry = (h/2)*0.92;
+    if (tooCloseToBase(cx, cy, Math.max(rx,ry))) return null;
+    crevasses.push({ id: ++crevasseIdCounter, x: cx, y: cy, key, longSide: CREVASSE_LONG_SIDE, aspectRatio: type.aspectRatio, rotation, rx, ry });
+    return { x: cx, y: cy };
+  }
+
+  const isIceBiome = currentBiome === 'ice';
+
   const [minInteriorLakes,maxInteriorLakes] = biomeCfg.lakeInteriorCount;
   const interiorLakeCount = minInteriorLakes + Math.floor(rnd()*(maxInteriorLakes-minInteriorLakes+1));
   const placedLakeCenters = []; // tracked so rivers can later be steered toward one of these as an outlet, and so Urban Hell's park zones (below) can anchor on them
@@ -3054,16 +3128,16 @@ function genTerrain(seedValue){
       if (
         !tooCloseToBase(cx, cy, 60) &&
         !overlapsExistingMountain(cx, cy, 150) &&
-        !overlapsExistingLake(cx, cy, 150)
+        (isIceBiome ? !overlapsExistingCrevasse(cx, cy, 150) : !overlapsExistingLake(cx, cy, 150))
       ) { placed = true; break; }
     } while (tries<25);
     if (!placed) continue;
-    const center = placeLake(cx, cy);
+    const center = isIceBiome ? placeCrevasse(cx, cy) : placeLake(cx, cy);
     if (center) placedLakeCenters.push(center);
   }
 
-  // Edge-cropped lakes, same "centered on/past the boundary" technique as
-  // edge mountains above.
+  // Edge-cropped lakes/crevasses, same "centered on/past the boundary"
+  // technique as edge mountains above.
   const [minEdgeLakes,maxEdgeLakes] = biomeCfg.lakeEdgeCount;
   const edgeLakeCount = minEdgeLakes + Math.floor(rnd()*(maxEdgeLakes-minEdgeLakes+1));
   for (let i=0; i<edgeLakeCount; i++) {
@@ -3078,9 +3152,9 @@ function genTerrain(seedValue){
 
     if (tooCloseToBase(cx, cy, 60)) continue;
     if (overlapsExistingMountain(cx, cy, 100)) continue;
-    if (overlapsExistingLake(cx, cy, 100)) continue;
+    if (isIceBiome ? overlapsExistingCrevasse(cx, cy, 100) : overlapsExistingLake(cx, cy, 100)) continue;
 
-    const center = placeLake(cx, cy);
+    const center = isIceBiome ? placeCrevasse(cx, cy) : placeLake(cx, cy);
     if (center) placedLakeCenters.push(center);
   }
 
@@ -3092,13 +3166,17 @@ function genTerrain(seedValue){
   // reasonable (base-clearance-checked, not mountain-overlapping) instead
   // of re-deriving new ones. genTrees reads this array to know where it's
   // allowed to place park trees for Urban Hell (which otherwise has no
-  // scattered/clumped trees at all - see treeStyle: 'parksOnly').
+  // scattered/clumped trees at all - see treeStyle: 'parksOnly'). Never
+  // relevant for Ice (which builds crevasses instead of lakes above and
+  // isn't parksOnly anyway), but harmless either way since it's gated on
+  // treeStyle first.
   parkZones = biomeCfg.treeStyle === 'parksOnly'
     ? placedLakeCenters.map(l => ({x: l.x, y: l.y, radius: 140 + rnd()*80}))
     : [];
 
   bakeMountainSolidGrid();
   bakeLakeSolidGrid();
+  bakeCrevasseSolidGrid();
 
   // ---------------------------------------------------------------------------
   // Rivers removed per request ("remove rivers from the maps - it's not
@@ -3159,6 +3237,10 @@ function genTerrain(seedValue){
             lakeSolid[
               Math.max(0, Math.min(terrainRows-1, Math.round(wy/TERRAIN_CELL))) * terrainCols +
               Math.max(0, Math.min(terrainCols-1, Math.round(wx/TERRAIN_CELL)))
+            ] === 1 ||
+            crevasseSolid[
+              Math.max(0, Math.min(terrainRows-1, Math.round(wy/TERRAIN_CELL))) * terrainCols +
+              Math.max(0, Math.min(terrainCols-1, Math.round(wx/TERRAIN_CELL)))
             ] === 1
           ) return true;
         }
@@ -3203,17 +3285,23 @@ function isLakeSolidAt(x, y) {
   const row = Math.max(0, Math.min(terrainRows-1, Math.round(y/TERRAIN_CELL)));
   return lakeSolid[row*terrainCols+col] === 1;
 }
+function isCrevasseSolidAt(x, y) {
+  const col = Math.max(0, Math.min(terrainCols-1, Math.round(x/TERRAIN_CELL)));
+  const row = Math.max(0, Math.min(terrainRows-1, Math.round(y/TERRAIN_CELL)));
+  return crevasseSolid[row*terrainCols+col] === 1;
+}
 // isMountain is the single choke point every piece of pathfinding, unit
 // collision, and placement logic in the file calls to ask "is this spot
-// impassable to walk through" - both mountains and lakes count, since both
-// block movement equally. Combat is the one exception: "lakes do not
-// restrict line of sight or weapon fire - you can fire over them" - so
-// sight/fire checks use lineBlockedBySight instead (see below), which only
-// tests isMountainSolidAt, deliberately leaving lakes out.
+// impassable to walk through" - mountains, lakes AND crevasses all count,
+// since all three block movement equally. Combat is the one exception:
+// "lakes/crevasses do not restrict line of sight or weapon fire - you can
+// fire over them" - so sight/fire checks use lineBlockedBySight instead
+// (see below), which only tests isMountainSolidAt, deliberately leaving
+// both out.
 function isMountain(x, y) {
   if (appState === 'test') return false; // test arena is always fully open, regardless of the underlying terrain seed
   if (x<0||y<0||x>WORLD.w||y>WORLD.h) return true;
-  return isMountainSolidAt(x,y) || isLakeSolidAt(x,y);
+  return isMountainSolidAt(x,y) || isLakeSolidAt(x,y) || isCrevasseSolidAt(x,y);
 }
 // Rendering-only check for whether a given point is specifically a LAKE
 // (not a mountain) - kept for anything that wants to tell the two apart
@@ -3222,6 +3310,12 @@ function isLakeAt(x, y) {
   if (appState === 'test') return false;
   if (x<0||y<0||x>WORLD.w||y>WORLD.h) return false; // out-of-bounds is handled by isMountain's own bounds check; this function only answers "is this in-bounds point a lake"
   return isLakeSolidAt(x,y);
+}
+// Same, for crevasses specifically.
+function isCrevasseAt(x, y) {
+  if (appState === 'test') return false;
+  if (x<0||y<0||x>WORLD.w||y>WORLD.h) return false;
+  return isCrevasseSolidAt(x,y);
 }
 
 // Rivers are NOT part of the impassable-terrain system (see the comment on
@@ -4440,12 +4534,12 @@ function lineBlockedByMountain(x0,y0,x1,y1) {
   }
   return false;
 }
-// Sight/weapon-fire version of the check above - "lakes do not restrict
-// line of sight or weapon fire, you can fire over them", unlike movement
-// (lineBlockedByMountain), which treats a lake as just as impassable as a
-// mountain. Only tests isMountainSolidAt (real rock), deliberately leaving
-// lakes out, so a unit on one shore can freely see and shoot at a target
-// across the water.
+// Sight/weapon-fire version of the check above - "lakes/crevasses do not
+// restrict line of sight or weapon fire, you can fire over them", unlike
+// movement (lineBlockedByMountain), which treats them as just as impassable
+// as a mountain. Only tests isMountainSolidAt (real rock), deliberately
+// leaving both out, so a unit on one shore/edge can freely see and shoot at
+// a target across the water or crevasse.
 function lineBlockedBySight(x0,y0,x1,y1) {
   const dist = Math.hypot(x1-x0, y1-y0);
   const steps = Math.max(1, Math.ceil(dist / (TERRAIN_CELL*0.5)));
@@ -4654,6 +4748,7 @@ function applyMapSize(sizeKey, randomizeCorners=true) {
   terrainRows = Math.ceil(WORLD.h / TERRAIN_CELL) + 1;
   mountainSolid = new Uint8Array(terrainCols * terrainRows);
   lakeSolid = new Uint8Array(terrainCols * terrainRows);
+  crevasseSolid = new Uint8Array(terrainCols * terrainRows);
 
   navCols = Math.ceil(WORLD.w / NAV_CELL) + 1;
   navRows = Math.ceil(WORLD.h / NAV_CELL) + 1;
@@ -10211,6 +10306,7 @@ function serializeGame() {
     terrainCols, terrainRows,
     mountains: mountains.map(m => Object.assign({}, m)),
     lakes: lakes.map(l => Object.assign({}, l)),
+    crevasses: crevasses.map(c => Object.assign({}, c)),
     rivers: rivers.map(r => Object.assign({}, r)),
     parkZones: parkZones.map(z => Object.assign({}, z)),
     // Roads are actual map tiles, so preserve the exact tile/rotation layout
@@ -10429,6 +10525,7 @@ function applyLoadedGame(data) {
     terrainRows = Math.ceil(WORLD.h / TERRAIN_CELL) + 1;
     mountainSolid = new Uint8Array(terrainCols * terrainRows);
     lakeSolid = new Uint8Array(terrainCols * terrainRows);
+    crevasseSolid = new Uint8Array(terrainCols * terrainRows);
     navCols = Math.ceil(WORLD.w / NAV_CELL) + 1;
     navRows = Math.ceil(WORLD.h / NAV_CELL) + 1;
     navBlocked = new Uint8Array(navCols * navRows);
@@ -10494,6 +10591,11 @@ function applyLoadedGame(data) {
     lakes = Array.isArray(data.lakes) ? data.lakes.map(l => Object.assign({}, l)) : [];
     lakeSolid = new Uint8Array(terrainCols * terrainRows);
     bakeLakeSolidGrid();
+    // Same reasoning for crevasses - saves from before crevasses existed
+    // simply come back with none.
+    crevasses = Array.isArray(data.crevasses) ? data.crevasses.map(c => Object.assign({}, c)) : [];
+    crevasseSolid = new Uint8Array(terrainCols * terrainRows);
+    bakeCrevasseSolidGrid();
     rivers = Array.isArray(data.rivers) ? data.rivers.map(r => Object.assign({}, r)) : [];
     parkZones = Array.isArray(data.parkZones) ? data.parkZones.map(z => Object.assign({}, z)) : [];
     roadGrid = data.roadGrid.map(r => Object.assign({}, r));
@@ -10991,6 +11093,7 @@ function render() {
   // lakes - same impassable-mass visual tier as mountains, drawn right
   // alongside them
   if (appState !== 'test') drawLakes();
+  if (appState !== 'test') drawCrevasses();
 
   // Old procedural rock/brush decorations are disabled; terrain tiles and raster tree sprites provide the scenery.
 
@@ -11552,6 +11655,31 @@ function drawLakes() {
     ctx.translate(s.x, s.y);
     ctx.rotate(l.rotation);
     drawSpriteAspectFit(img, l.longSide*camera.zoom);
+    ctx.restore();
+  });
+}
+
+// Crevasses: Ice-biome-only replacement for lakes - same real-image stamp
+// rendering as drawLakes just above, different image pool/array.
+function drawCrevasses() {
+  if (!crevasses.length) return;
+  const topLeft = screenToWorld(-100, -100);
+  const botRight = screenToWorld(viewportWidth()+100, viewportHeight()+100);
+  const visible = crevasses.filter(c => {
+    const maxR = Math.max(c.rx, c.ry);
+    return c.x+maxR >= topLeft.x && c.x-maxR <= botRight.x &&
+           c.y+maxR >= topLeft.y && c.y-maxR <= botRight.y;
+  });
+  if (!visible.length) return;
+  visible.sort((a,b) => a.y - b.y);
+  visible.forEach(c => {
+    const img = crevasseImages[c.key];
+    if (!img || !crevasseImageReady[c.key] || !img.naturalWidth) return;
+    const s = worldToScreen(c.x, c.y);
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate(c.rotation);
+    drawSpriteAspectFit(img, c.longSide*camera.zoom);
     ctx.restore();
   });
 }
