@@ -685,6 +685,7 @@
       <div class="cmdBtn disabled" id="btnBuySiegeMortar">SIEGE<br><span id="buySiegeMortarCost">300</span></div>
       <div class="cmdBtn disabled" id="btnBuyATInfantry">AT INF<br><span id="buyATInfantryCost">40</span></div>
       <div class="cmdBtn disabled" id="btnBuySappers">SAPPERS<br><span id="buySappersCost">40</span></div>
+      <div class="cmdBtn disabled" id="btnBuyMedic">MEDIC<br><span id="buyMedicCost">30</span></div>
     </div>
   </div>
 </div>
@@ -784,7 +785,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 131;
+const GAME_VERSION = 133;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -814,14 +815,14 @@ const ROAD_TILE_DATA_URIS = {"road_straight": "assets/terrain/roads/road_straigh
 
 const CRATER_SPRITE_DATA_URIS = {"crater1": "assets/terrain/craters/crater1.png", "crater2": "assets/terrain/craters/crater2.png", "crater3": "assets/terrain/craters/crater3.png", "crater4": "assets/terrain/craters/crater4.png", "crater5": "assets/terrain/craters/crater5.png", "crater6": "assets/terrain/craters/crater6.png"};
 
-const SPRITE_DATA_URIS = {"body_atinfantry": "assets/units/body/body_atinfantry.png", "wreck_atinfantry": "assets/units/body/wreck_atinfantry.png", "body_sappers": "assets/units/body/body_sappers.png", "wreck_sappers": "assets/units/body/wreck_sappers.png", "body_siegemortar": "assets/units/body/body_siegemortar.png", "wreck_siegemortar": "assets/units/body/wreck_siegemortar.png", "body_barricade": "assets/units/body/body_barricade.png", "wreck_barricade": "assets/units/body/wreck_barricade.png", "body_artillery": "assets/units/body/body_artillery.png", "body_blockhouse": "assets/units/body/body_blockhouse.png", "body_foxhole": "assets/units/body/body_foxhole.png", "body_infantry": "assets/units/body/body_infantry.png", "body_mortar": "assets/units/body/body_mortar.png", "body_apc": "assets/units/body/body_apc.png", "body_assaulttank": "assets/units/body/body_assaulttank.png", "body_autotank": "assets/units/body/body_autotank.png", "body_lrmmech": "assets/units/body/body_lrmmech.png", "body_mech": "assets/units/body/body_mech.png", "body_scout": "assets/units/body/body_scout.png", "body_tank": "assets/units/body/body_tank.png", "body_turret": "assets/units/body/body_turret.png"};
+const SPRITE_DATA_URIS = {"body_atinfantry": "assets/units/body/body_atinfantry.png", "wreck_atinfantry": "assets/units/body/wreck_atinfantry.png", "body_sappers": "assets/units/body/body_sappers.png", "wreck_sappers": "assets/units/body/wreck_sappers.png", "body_siegemortar": "assets/units/body/body_siegemortar.png", "wreck_siegemortar": "assets/units/body/wreck_siegemortar.png", "body_barricade": "assets/units/body/body_barricade.png", "wreck_barricade": "assets/units/body/wreck_barricade.png", "body_artillery": "assets/units/body/body_artillery.png", "body_blockhouse": "assets/units/body/body_blockhouse.png", "body_foxhole": "assets/units/body/body_foxhole.png", "body_infantry": "assets/units/body/body_infantry.png", "body_mortar": "assets/units/body/body_mortar.png", "body_apc": "assets/units/body/body_apc.png", "body_assaulttank": "assets/units/body/body_assaulttank.png", "body_autotank": "assets/units/body/body_autotank.png", "body_lrmmech": "assets/units/body/body_lrmmech.png", "body_mech": "assets/units/body/body_mech.png", "body_scout": "assets/units/body/body_scout.png", "body_tank": "assets/units/body/body_tank.png", "body_turret": "assets/units/body/body_turret.png", "body_medic": "assets/units/body/body_medic.png"};
 
 const NEW_BUILDING_SPRITE_DATA_URIS = {"b1_normal": "assets/buildings/standard/b1_normal.png", "b1_slight": "assets/buildings/standard/b1_slight.png", "b1_extensive": "assets/buildings/standard/b1_extensive.png", "b1_destroyed": "assets/buildings/standard/b1_destroyed.png", "b2_normal": "assets/buildings/standard/b2_normal.png", "b2_slight": "assets/buildings/standard/b2_slight.png", "b2_extensive": "assets/buildings/standard/b2_extensive.png", "b2_destroyed": "assets/buildings/standard/b2_destroyed.png", "b3_normal": "assets/buildings/standard/b3_normal.png", "b3_slight": "assets/buildings/standard/b3_slight.png", "b3_extensive": "assets/buildings/standard/b3_extensive.png", "b3_destroyed": "assets/buildings/standard/b3_destroyed.png", "b4_normal": "assets/buildings/standard/b4_normal.png", "b4_slight": "assets/buildings/standard/b4_slight.png", "b4_extensive": "assets/buildings/standard/b4_extensive.png", "b4_destroyed": "assets/buildings/standard/b4_destroyed.png", "b5_normal": "assets/buildings/standard/b5_normal.png", "b5_slight": "assets/buildings/standard/b5_slight.png", "b5_extensive": "assets/buildings/standard/b5_extensive.png", "b5_destroyed": "assets/buildings/standard/b5_destroyed.png", "b6_normal": "assets/buildings/standard/b6_normal.png", "b6_slight": "assets/buildings/standard/b6_slight.png", "b6_extensive": "assets/buildings/standard/b6_extensive.png", "b6_destroyed": "assets/buildings/standard/b6_destroyed.png", "b7_normal": "assets/buildings/standard/b7_normal.png", "b7_slight": "assets/buildings/standard/b7_slight.png", "b7_extensive": "assets/buildings/standard/b7_extensive.png", "b7_destroyed": "assets/buildings/standard/b7_destroyed.png", "b8_normal": "assets/buildings/standard/b8_normal.png", "b8_slight": "assets/buildings/standard/b8_slight.png", "b8_extensive": "assets/buildings/standard/b8_extensive.png", "b8_destroyed": "assets/buildings/standard/b8_destroyed.png", "b9_normal": "assets/buildings/standard/b9_normal.png", "b9_slight": "assets/buildings/standard/b9_slight.png", "b9_extensive": "assets/buildings/standard/b9_extensive.png", "b9_destroyed": "assets/buildings/standard/b9_destroyed.png", "b10_normal": "assets/buildings/standard/b10_normal.png", "b10_slight": "assets/buildings/standard/b10_slight.png", "b10_extensive": "assets/buildings/standard/b10_extensive.png", "b10_destroyed": "assets/buildings/standard/b10_destroyed.png"};
 
 const BUILDING_SPRITE_DATA_URIS = {"square_normal": "assets/buildings/legacy/square_normal.png", "square_damaged": "assets/buildings/legacy/square_damaged.png", "rectangle_normal": "assets/buildings/legacy/rectangle_normal.png", "rectangle_damaged": "assets/buildings/legacy/rectangle_damaged.png", "L_normal": "assets/buildings/legacy/L_normal.png", "L_damaged": "assets/buildings/legacy/L_damaged.png", "cross_normal": "assets/buildings/legacy/cross_normal.png", "cross_damaged": "assets/buildings/legacy/cross_damaged.png"};
 
 const HULL_TURRET_UNITS = [];
-const BODY_ONLY_UNITS = ['artillery','infantry','mortar','blockhouse','foxhole','tank','scout','autotank','turret','assaulttank','apc','mech','lrmmech','atinfantry','sappers','siegemortar','barricade'];
+const BODY_ONLY_UNITS = ['artillery','infantry','mortar','blockhouse','foxhole','tank','scout','autotank','turret','assaulttank','apc','mech','lrmmech','atinfantry','sappers','siegemortar','barricade','medic'];
 
 // Units whose sprite art was drawn facing "up" (toward the top of its own
 // source image) rather than facing "right" - this engine's rotation
@@ -1060,8 +1061,8 @@ Object.keys(LAKE_DATA_URIS).forEach(key => {
 // the "do not scale lakes" rule, crevasses use one fixed size and vary only
 // by rotation, not scale.
 // ---------------------------------------------------------------------------
-const CREVASSE_TYPES = [{"key": "cv1", "aspectRatio": 0.6}, {"key": "cv2", "aspectRatio": 0.7}, {"key": "cv3", "aspectRatio": 0.5585}, {"key": "cv4", "aspectRatio": 0.4024}, {"key": "cv5", "aspectRatio": 0.5524}, {"key": "cv6", "aspectRatio": 0.9881}, {"key": "cv7", "aspectRatio": 1.9309}, {"key": "cv8", "aspectRatio": 0.9476}, {"key": "cv9", "aspectRatio": 0.9714}];
-const CREVASSE_DATA_URIS = {"cv1": "assets/terrain/crevasses/cv_01.png", "cv2": "assets/terrain/crevasses/cv_02.png", "cv3": "assets/terrain/crevasses/cv_03.png", "cv4": "assets/terrain/crevasses/cv_04.png", "cv5": "assets/terrain/crevasses/cv_05.png", "cv6": "assets/terrain/crevasses/cv_06.png", "cv7": "assets/terrain/crevasses/cv_07.png", "cv8": "assets/terrain/crevasses/cv_08.png", "cv9": "assets/terrain/crevasses/cv_09.png"};
+const CREVASSE_TYPES = [{"key": "cv1", "aspectRatio": 0.5952}, {"key": "cv2", "aspectRatio": 0.6905}, {"key": "cv3", "aspectRatio": 0.5619}, {"key": "cv4", "aspectRatio": 0.381}, {"key": "cv5", "aspectRatio": 0.5524}, {"key": "cv6", "aspectRatio": 0.9881}, {"key": "cv7", "aspectRatio": 0.9048}, {"key": "cv8", "aspectRatio": 0.9643}, {"key": "cv9", "aspectRatio": 1.922}];
+const CREVASSE_DATA_URIS = {"cv1": "assets/terrain/crevasses/cv_01_v2.png", "cv2": "assets/terrain/crevasses/cv_02_v2.png", "cv3": "assets/terrain/crevasses/cv_03_v2.png", "cv4": "assets/terrain/crevasses/cv_04_v2.png", "cv5": "assets/terrain/crevasses/cv_05_v2.png", "cv6": "assets/terrain/crevasses/cv_06_v2.png", "cv7": "assets/terrain/crevasses/cv_07_v2.png", "cv8": "assets/terrain/crevasses/cv_08_v2.png", "cv9": "assets/terrain/crevasses/cv_09_v2.png"};
 const CREVASSE_TYPE_BY_KEY = {};
 CREVASSE_TYPES.forEach(c => { CREVASSE_TYPE_BY_KEY[c.key] = c; });
 const crevasseImages = {};
@@ -1115,7 +1116,7 @@ function drawSpriteAspectFit(img, targetSize) {
 // burning-wreck system (spawnWreck/updateWrecks/drawWrecks below) rather
 // than the live-unit rendering path in drawTank/drawSpriteUnit.
 // ---------------------------------------------------------------------------
-const WRECK_DATA_URIS = {"wreck_apc": "assets/units/wreck/wreck_apc.png", "wreck_artillery": "assets/units/wreck/wreck_artillery.png", "wreck_assaulttank": "assets/units/wreck/wreck_assaulttank.png", "wreck_autotank": "assets/units/wreck/wreck_autotank.png", "wreck_blockhouse": "assets/units/wreck/wreck_blockhouse.png", "wreck_foxhole": "assets/units/wreck/wreck_foxhole.png", "wreck_infantry": "assets/units/wreck/wreck_infantry.png", "wreck_lrmmech": "assets/units/wreck/wreck_lrmmech.png", "wreck_mech": "assets/units/wreck/wreck_mech.png", "wreck_mortar": "assets/units/wreck/wreck_mortar.png", "wreck_scout": "assets/units/wreck/wreck_scout.png", "wreck_tank": "assets/units/wreck/wreck_tank.png", "wreck_turret": "assets/units/wreck/wreck_turret.png", "wreck_atinfantry": "assets/units/wreck/wreck_atinfantry.png", "wreck_sappers": "assets/units/wreck/wreck_sappers.png", "wreck_siegemortar": "assets/units/wreck/wreck_siegemortar.png", "wreck_barricade": "assets/units/wreck/wreck_barricade.png"};
+const WRECK_DATA_URIS = {"wreck_apc": "assets/units/wreck/wreck_apc.png", "wreck_artillery": "assets/units/wreck/wreck_artillery.png", "wreck_assaulttank": "assets/units/wreck/wreck_assaulttank.png", "wreck_autotank": "assets/units/wreck/wreck_autotank.png", "wreck_blockhouse": "assets/units/wreck/wreck_blockhouse.png", "wreck_foxhole": "assets/units/wreck/wreck_foxhole.png", "wreck_infantry": "assets/units/wreck/wreck_infantry.png", "wreck_lrmmech": "assets/units/wreck/wreck_lrmmech.png", "wreck_mech": "assets/units/wreck/wreck_mech.png", "wreck_mortar": "assets/units/wreck/wreck_mortar.png", "wreck_scout": "assets/units/wreck/wreck_scout.png", "wreck_tank": "assets/units/wreck/wreck_tank.png", "wreck_turret": "assets/units/wreck/wreck_turret.png", "wreck_atinfantry": "assets/units/wreck/wreck_atinfantry.png", "wreck_sappers": "assets/units/wreck/wreck_sappers.png", "wreck_siegemortar": "assets/units/wreck/wreck_siegemortar.png", "wreck_barricade": "assets/units/wreck/wreck_barricade.png", "wreck_medic": "assets/units/wreck/wreck_medic.png"};
 const wreckSprites = {};
 const wreckSpriteReady = {};
 Object.keys(WRECK_DATA_URIS).forEach(key => {
@@ -2325,6 +2326,23 @@ const UNIT_STATS = {
     range: 150, sight: 200, react: 300, speed: 20, shellSpeed: 1000,
     blastRadius: 0, setupTime: 0, canFireWhileMoving: true, collisionRadius: 10
   },
+  // Medic: identical to Infantry in every stat EXCEPT combat - "same stats
+  // as a regular infantry except it has no weapon, it cannot do damage".
+  // range/damage/shellSpeed/react are all zeroed out (the same combination
+  // Foxhole below uses to be a real, functioning unit that simply never
+  // fights) rather than just zeroing damage alone, so it never even tries
+  // to move into firing position against anything. It's added to
+  // INFANTRY_CLASS_TYPES, so it shares every other piece of Infantry's
+  // behavior too - stealth concealment near trees/buildings, walking
+  // through forest, capturing supply depots, the Defend armor bonus - and
+  // can heal any unit in that same set via its own Heal ability (see
+  // BUILDABLE_STRUCTURES/buildBuildMenu's Heal button), the mirror image of
+  // Sappers' Repair now explicitly excluding that set.
+  medic: {
+    cost: 30, hp: 100, armor: 5, damage: 0, fireCooldown: 0.2,
+    range: 0, sight: 200, react: 0, speed: 20, shellSpeed: 0,
+    blastRadius: 0, setupTime: 0, canFireWhileMoving: true, collisionRadius: 10
+  },
   // Table listed "Fire cooldown (sec): 1" alongside "Shots per second: 0.5" -
   // these contradict (1s cooldown is 1.0 shots/sec, not 0.5), so this uses a
   // 2s cooldown to match the stated 0.5 shots/sec figure, same approach as
@@ -2496,7 +2514,7 @@ const SPLASH_DAMAGE_UNIT_TYPES = new Set(
 // alongside the thematically-related STEALTH_UNIT_TYPES further down) since
 // several of its use sites are themselves earlier in the file than that
 // declaration would be.
-const INFANTRY_CLASS_TYPES = new Set(['infantry','atinfantry','sappers']);
+const INFANTRY_CLASS_TYPES = new Set(['infantry','atinfantry','sappers','medic']);
 function statsFor(typeName) {
   const s = UNIT_STATS[typeName];
   return {
@@ -5039,7 +5057,7 @@ entities.push(blueBase, redBase);
 // way ownership changes is by capture.
 const SUPPLY_GEN_INTERVAL = 1.0; // seconds per point, per owned depot
 // Costs are read directly from the unit stats table so there's a single source of truth.
-const UNIT_COSTS = { tank: UNIT_STATS.tank.cost, artillery: UNIT_STATS.artillery.cost, scout: UNIT_STATS.scout.cost, autotank: UNIT_STATS.autotank.cost, turret: UNIT_STATS.turret.cost, infantry: UNIT_STATS.infantry.cost, mortar: UNIT_STATS.mortar.cost, blockhouse: UNIT_STATS.blockhouse.cost, mech: UNIT_STATS.mech.cost, assaulttank: UNIT_STATS.assaulttank.cost, apc: UNIT_STATS.apc.cost, lrmmech: UNIT_STATS.lrmmech.cost, siegemortar: UNIT_STATS.siegemortar.cost, atinfantry: UNIT_STATS.atinfantry.cost, sappers: UNIT_STATS.sappers.cost };
+const UNIT_COSTS = { tank: UNIT_STATS.tank.cost, artillery: UNIT_STATS.artillery.cost, scout: UNIT_STATS.scout.cost, autotank: UNIT_STATS.autotank.cost, turret: UNIT_STATS.turret.cost, infantry: UNIT_STATS.infantry.cost, mortar: UNIT_STATS.mortar.cost, blockhouse: UNIT_STATS.blockhouse.cost, mech: UNIT_STATS.mech.cost, assaulttank: UNIT_STATS.assaulttank.cost, apc: UNIT_STATS.apc.cost, lrmmech: UNIT_STATS.lrmmech.cost, siegemortar: UNIT_STATS.siegemortar.cost, atinfantry: UNIT_STATS.atinfantry.cost, sappers: UNIT_STATS.sappers.cost, medic: UNIT_STATS.medic.cost };
 const TANK_COST = UNIT_COSTS.tank; // kept for any existing references
 let supply = { blue: 0, red: 0 };
 
@@ -5937,14 +5955,26 @@ function handleTap(sx, sy) {
   if (awaitingRepairTarget) {
     awaitingRepairTarget = false;
     const target = findTankNear(w.x, w.y, 18/camera.zoom);
-    const sappers = pendingRepairSappers;
+    const healers = pendingRepairSappers;
     pendingRepairSappers = [];
+    // Both Repair (Sappers) and Heal (Medic) funnel through this same block
+    // - the healers queued up tell us which ability this actually is, since
+    // the two buttons never mix unit types in one selection (see
+    // buildBuildMenu). "Remove the ability for the Sapper to repair
+    // Infantry-class units" / Medic can heal "all Infantry class units" -
+    // opposite target restrictions on the exact same INFANTRY_CLASS_TYPES
+    // set used everywhere else in the file for this grouping.
+    const isMedicHeal = healers.length > 0 && healers[0].unitType === 'medic';
     if (!target || target.team !== 'blue') {
-      showToast('Repair: tap a friendly unit');
+      showToast(isMedicHeal ? 'Heal: tap a friendly Infantry-class unit' : 'Repair: tap a friendly unit');
+    } else if (isMedicHeal && !INFANTRY_CLASS_TYPES.has(target.unitType)) {
+      showToast('Medics can only heal Infantry-class units');
+    } else if (!isMedicHeal && INFANTRY_CLASS_TYPES.has(target.unitType)) {
+      showToast('Sappers can no longer repair Infantry-class units - use a Medic');
     } else if (target.hp >= target.maxHp) {
       showToast('That unit is already at full health');
     } else {
-      sappers.forEach(s => { if (s.alive) assignFieldRepair(s, target); });
+      healers.forEach(s => { if (s.alive) assignFieldRepair(s, target); });
     }
     return;
   }
@@ -6164,14 +6194,18 @@ document.getElementById('btnBuild').addEventListener('click', ()=>{
   // BUILD: opens the build menu listing every structure ANY selected unit
   // is eligible to build, per getBuildableStructuresFor's per-unit-type
   // builtBy list - "a menu pops up listing all the structures the infantry
-  // can build". Infantry only ever sees Foxhole; Sappers see both Foxhole
-  // and Barricade; AT Infantry (infantry-class for concealment purposes,
-  // but explicitly "cannot build") is excluded entirely here since
-  // getBuildableStructuresFor('atinfantry') always returns an empty list -
-  // it never appears in BUILDABLE_STRUCTURES' builtBy anywhere, so it can
-  // never contribute an eligible unit to `eligible` below no matter how
-  // this filter is written.
-  const eligible = [...selected].filter(t => !t.permanentlyDeployed && getBuildableStructuresFor(t.unitType).length>0);
+  // can build". Infantry only ever sees Foxhole; Sappers see Foxhole,
+  // Barricade and Turret, plus the Repair/Demolish abilities; AT Infantry
+  // (infantry-class for concealment purposes, but explicitly "cannot
+  // build") is excluded entirely here since getBuildableStructuresFor
+  // ('atinfantry') always returns an empty list - it never appears in
+  // BUILDABLE_STRUCTURES' builtBy anywhere, so it can never contribute an
+  // eligible unit to `eligible` below no matter how this filter is written.
+  // Medic is a second, explicit exception alongside the structures check -
+  // it can't build anything either, but still needs this menu to open for
+  // its own Heal ability (same "ability, not a structure" treatment
+  // Repair/Demolish already get below).
+  const eligible = [...selected].filter(t => !t.permanentlyDeployed && (getBuildableStructuresFor(t.unitType).length>0 || t.unitType === 'medic'));
   if (!eligible.length) return;
   buildBuildMenu(eligible);
   document.getElementById('buildMenuOverlay').style.display = 'flex';
@@ -6247,6 +6281,26 @@ function buildBuildMenu(eligibleUnits) {
       document.getElementById('buildMenuOverlay').style.display = 'none';
       pendingDemolishSappers = demolishSappers;
       awaitingDemolishTarget = true;
+    });
+    container.appendChild(btn);
+  }
+
+  // Heal: Medic's own ability, not a structure - reuses the exact same
+  // awaitingRepairTarget/pendingRepairSappers/assignFieldRepair pipeline
+  // Sappers' Repair already uses (walk to target, hold still and work on it
+  // over time, same freeze/cancel/save-load handling) rather than a
+  // parallel mechanic - the only difference between the two is WHO can be
+  // targeted, enforced at the point the tap actually lands (see
+  // awaitingRepairTarget in handleTap): Repair now rejects Infantry-class
+  // targets, Heal requires them.
+  const healMedics = eligibleUnits.filter(t => t.alive && !t.permanentlyDeployed && t.unitType === 'medic');
+  if (healMedics.length) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Heal';
+    btn.addEventListener('click', ()=>{
+      document.getElementById('buildMenuOverlay').style.display = 'none';
+      pendingRepairSappers = healMedics;
+      awaitingRepairTarget = true;
     });
     container.appendChild(btn);
   }
@@ -6343,6 +6397,9 @@ document.getElementById('btnBuyATInfantry').addEventListener('click', ()=>{
 });
 document.getElementById('btnBuySappers').addEventListener('click', ()=>{
   purchaseUnit('blue', 'sappers');
+});
+document.getElementById('btnBuyMedic').addEventListener('click', ()=>{
+  purchaseUnit('blue', 'medic');
 });
 
 // hide hint after a while
@@ -6671,7 +6728,8 @@ const BUY_BUTTON_IDS = {
   tank: 'btnBuyTank', artillery: 'btnBuyArtillery', scout: 'btnBuyScout', autotank: 'btnBuyAutoTank',
   turret: 'btnBuyTurret', infantry: 'btnBuyInfantry', mortar: 'btnBuyMortar', blockhouse: 'btnBuyBlockhouse',
   mech: 'btnBuyMech', assaulttank: 'btnBuyAssaultTank', apc: 'btnBuyAPC',
-  lrmmech: 'btnBuyLRMMech', siegemortar: 'btnBuySiegeMortar', atinfantry: 'btnBuyATInfantry', sappers: 'btnBuySappers'
+  lrmmech: 'btnBuyLRMMech', siegemortar: 'btnBuySiegeMortar', atinfantry: 'btnBuyATInfantry', sappers: 'btnBuySappers',
+  medic: 'btnBuyMedic'
 };
 
 const RED_PURCHASE_WEIGHTS = {
@@ -6715,6 +6773,13 @@ const RED_PURCHASE_WEIGHTS_AGGRESSIVE = {
   // Infantry rather than down at the support-structure tier.
   siegemortar: 1, atinfantry: 3, sappers: 2
 };
+// Medic is explicitly zeroed here (not just omitted) in both tables above -
+// pickWeightedPurchaseTarget defaults any UNLISTED type to weight 1, which
+// is not what's wanted here. With no weapon and no AI logic to actually
+// assign its Heal ability to a target, a purchased Medic would just wander
+// uselessly - kept a player-only support unit for now.
+RED_PURCHASE_WEIGHTS.medic = 0;
+RED_PURCHASE_WEIGHTS_AGGRESSIVE.medic = 0;
 function pickWeightedPurchaseTarget() {
   const weights = redStrategy === 'aggressive' ? RED_PURCHASE_WEIGHTS_AGGRESSIVE : RED_PURCHASE_WEIGHTS;
   const pool = [];
@@ -10094,13 +10159,16 @@ const UNIT_DESCRIPTIONS = {
   lrmmech: { label: 'LRM Mech', text: 'A large walker armed with a long-range rocket salvo instead of a single weapon, firing several rockets at once that can scatter across a cluster of targets. Very expensive, but hits harder than anything else at range.' },
   siegemortar: { label: 'Siege Mortar', text: 'A Blockhouse with an attached mortar - the same long-range splash weapon as Mortar, carried on a far tougher chassis. Cannot fire until deployed, and cannot move once deployed.' },
   atinfantry: { label: 'AT Infantry', text: 'Anti-tank infantry armed with a slow-firing but hard-hitting weapon and a longer reach than regular Infantry. Shares Infantry\'s concealment near trees, buildings, and foxholes, but cannot build.' },
-  sappers: { label: 'Sappers', text: 'Engineers and demolition experts armed with short-range satchel charges that deal heavy damage up close. Like Infantry, they can build a Foxhole or a Barricade, and can also send one out to repair a damaged friendly unit in the field via Build > Repair - it holds still (and can\'t fire) while being worked on, until it\'s fully healed or given a new order.' },
-  barricade: { label: 'Barricade', text: 'A built obstacle with no weapon of its own that blocks every unit until destroyed. Built by Sappers, it locks permanently in place once deployed and never turns to face the enemy.' }
+  sappers: { label: 'Sappers', text: 'Engineers and demolition experts armed with short-range satchel charges that deal heavy damage up close. Like Infantry, they can build a Foxhole or a Barricade, and can also send one out to repair a damaged friendly vehicle or structure in the field via Build > Repair (Infantry-class units need a Medic\'s Heal instead) - it holds still (and can\'t fire) while being worked on, until it\'s fully healed or given a new order. Sappers can also build a Turret in the field for the same cost as buying one at the home base, and can demolish a friendly unit or structure that\'s no longer needed via Build > Demolish.' },
+  barricade: { label: 'Barricade', text: 'A built obstacle with no weapon of its own that blocks every unit until destroyed. Built by Sappers, it locks permanently in place once deployed and never turns to face the enemy.' },
+  // Medic: same role in the Heal pipeline that Sappers play for Repair, just
+  // restricted to the opposite set of targets - see INFANTRY_CLASS_TYPES.
+  medic: { label: 'Medic', text: 'A support Infantry squad with no weapon of its own and unable to deal damage. Can heal any Infantry-class unit (Infantry, AT Infantry, Sappers, or another Medic) in the field via Build > Heal - it holds still while working, until the target is fully healed or given a new order. Shares Infantry\'s concealment near trees, buildings, and foxholes.' }
 };
 // Display order for the instructions page - roughly cheapest/most basic
 // units first, working up to the most expensive/specialized, rather than
 // whatever arbitrary order UNIT_STATS' own keys happen to be declared in.
-const UNIT_DISPLAY_ORDER = ['tank','scout','autotank','assaulttank','infantry','atinfantry','sappers','apc','turret','artillery','mortar','blockhouse','siegemortar','foxhole','barricade','mech','lrmmech'];
+const UNIT_DISPLAY_ORDER = ['tank','scout','autotank','assaulttank','infantry','atinfantry','sappers','medic','apc','turret','artillery','mortar','blockhouse','siegemortar','foxhole','barricade','mech','lrmmech'];
 
 function buildUnitCards() {
   const container = document.getElementById('unitCardsContainer');
