@@ -785,7 +785,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 135;
+const GAME_VERSION = 136;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -2513,7 +2513,7 @@ const UNIT_STATS = {
   heavyartillery: {
     cost: 800, hp: 450, armor: 14, damage: 37.5, fireCooldown: 9,
     range: 840, sight: 460, react: 460, speed: 10, shellSpeed: 175,
-    blastRadius: 30, setupTime: 6, canFireWhileMoving: false, collisionRadius: 20,
+    blastRadius: 30, setupTime: 6, canFireWhileMoving: false, collisionRadius: 30,
     minRange: 150
   },
   // Embankment: identical stats to Barricade in every field below - the
@@ -2522,10 +2522,14 @@ const UNIT_STATS = {
   // handled via unitType checks in resolveUnitCollisions (movement
   // passability) and lineBlockedBySight (fire blocking) rather than any
   // stat here. Field-built by a Sapper only, same as Barricade.
+  // collisionRadius is double Barricade's (20 -> 40) per "increase the size
+  // of the embankment to double its size" - this also doubles its fire-
+  // blocking reach (lineBlockedByEmbankment uses this same radius), which
+  // is the correct, consistent side effect of a literally bigger obstacle.
   embankment: {
     cost: 0, hp: 500, armor: 15, damage: 0, fireCooldown: 1,
     range: 0, sight: 200, react: 0, speed: 10, shellSpeed: 0,
-    blastRadius: 0, setupTime: 20, canFireWhileMoving: false, collisionRadius: 20
+    blastRadius: 0, setupTime: 20, canFireWhileMoving: false, collisionRadius: 40
   }
 };
 
@@ -6007,6 +6011,13 @@ function handleTap(sx, sy) {
     selected.forEach(t=>{
       if (!SPLASH_DAMAGE_UNIT_TYPES.has(t.unitType)) return;
       anyOrdered = true;
+      // "Any unit ordered to attack ground will only fire once then return
+      // to their previous state" - snapshot what "previous state" means
+      // before any of it gets overwritten below, so the single shot handler
+      // (see the two fireProjectile call sites in updateTank) can restore
+      // it afterward rather than leaving the unit sitting idle in
+      // 'attacking' state forever with nothing left to shoot at.
+      t.groundAttackPrevDefending = t.defending;
       t.stealthConcealed = false;
       t.stealthDwellTime = 0;
       t.holdFire = false;
@@ -8018,6 +8029,25 @@ let gameOver = false;
 // always exceeds weapon range, so a stationary unit correctly holds and waits for
 // a directly-sighted enemy to close the remaining gap rather than freezing on an
 // unreachable one.
+// "Any unit ordered to attack ground will only fire once then return to
+// their previous state" - called right after fireProjectile at both call
+// sites below, and only actually does anything when the shot just fired was
+// at a synthetic ground point rather than a real enemy (a real attackTarget
+// keeps behaving exactly as before, firing every cooldown until it dies,
+// leaves range, or the player gives a new order). Restores the defending
+// flag captured at order-issue time (see awaitingGroundTarget in handleTap)
+// and clears attackTarget so the unit stops trying to fire at that same
+// point again, falling back to idle (or defending, if that's what it was
+// doing right before the order) rather than sitting frozen in 'attacking'
+// state with nothing left to shoot at.
+function resolveGroundAttackAfterFire(t) {
+  if (!t.attackTarget || t.attackTarget.kind !== 'ground') return;
+  t.attackTarget = null;
+  t.autoEngaged = false;
+  t.defending = !!t.groundAttackPrevDefending;
+  t.groundAttackPrevDefending = false;
+  t.state = t.defending ? 'defending' : (t.target ? 'moving' : 'idle');
+}
 function updateAutoEngage(t) {
   if (t.attackTarget && t.attackTarget.alive) return; // already have a target
   if (t.holdEngage) return; // player just ordered a move/retreat: don't auto-lock back onto a target
@@ -8553,6 +8583,7 @@ function updateTank(t, dt, now) {
             if (setupReady && deployReady && now - t.lastFire > t.fireCooldown*1000) {
               t.lastFire = now;
               fireProjectile(t, t.attackTarget, t.team, t.damage, t.unitType);
+              resolveGroundAttackAfterFire(t);
             }
           } else {
             // keep the hull moving toward its current move order (if any)
@@ -8583,6 +8614,7 @@ function updateTank(t, dt, now) {
             if (now - t.lastFire > t.fireCooldown*1000) {
               t.lastFire = now;
               fireProjectile(t, t.attackTarget, t.team, t.damage, t.unitType);
+              resolveGroundAttackAfterFire(t);
             }
           }
         }
