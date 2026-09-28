@@ -785,7 +785,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 140;
+const GAME_VERSION = 142;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -2428,7 +2428,7 @@ const UNIT_STATS = {
   // can hit several targets in a cluster rather than needing to converge on
   // exactly one point.
   lrmmech: {
-    cost: 350, hp: 280, armor: 20, damage: 10, fireCooldown: 8,
+    cost: 350, hp: 280, armor: 13, damage: 10, fireCooldown: 8,
     range: 400, sight: 240, react: 500, speed: 30, shellSpeed: 200,
     blastRadius: 40, setupTime: 0, canFireWhileMoving: true, collisionRadius: 20,
     minRange: 100
@@ -2843,6 +2843,35 @@ function isPointOnRoad(x, y, pad) {
   }
   return false;
 }
+// Rectangle-footprint version of the same road check, for anything that
+// isn't reasonably circular (buildings, compounds - both rectangular AABBs
+// with their own half-width/half-height). isPointOnRoad above treats `pad`
+// as a CIRCLE radius around (x,y) - a fine, tight approximation for
+// something roughly round (a tree trunk, a mountain/lake/crevasse's own
+// elliptical footprint), but a badly wrong one for a rectangle: passing a
+// building's own half-extent as a circle radius massively overestimates how
+// close it actually reaches a road, especially for a large or elongated
+// footprint. This does genuine rectangle-vs-road-strip overlap instead -
+// the exact same geometry genBuildings' own placement-time
+// buildingOverlapsRoad check already uses - so a building sitting properly
+// alongside a road with a real gap is correctly left alone.
+function aabbOverlapsRoad(x, y, hx, hy, pad) {
+  if (!roadGrid.length) return false;
+  const roadHalfWidth = ROAD_TILE_SIZE*0.16;
+  const roadHalfLength = ROAD_TILE_SIZE/2;
+  const search = Math.max(hx,hy) + roadHalfLength + roadHalfWidth + pad;
+  for (const cell of roadGrid) {
+    const cx = cell.col*ROAD_TILE_SIZE + ROAD_TILE_SIZE/2;
+    const cy = cell.row*ROAD_TILE_SIZE + ROAD_TILE_SIZE/2;
+    if (Math.hypot(cx-x,cy-y) > search) continue;
+    const dirs = rotateDirSetCW(ROAD_TILE_NATIVE_DIRS[cell.tile], cell.rotation);
+    if ((dirs.includes('N') || dirs.includes('S')) &&
+        Math.abs(x-cx) < (hx+roadHalfWidth+pad) && Math.abs(y-cy) < (hy+roadHalfLength+pad)) return true;
+    if ((dirs.includes('E') || dirs.includes('W')) &&
+        Math.abs(x-cx) < (hx+roadHalfLength+pad) && Math.abs(y-cy) < (hy+roadHalfWidth+pad)) return true;
+  }
+  return false;
+}
 // Final safety net, run once after every placement pass (trees, compounds,
 // buildings) has finished: sweep away anything that still ended up sitting
 // on the actual paved road surface despite each pass's own road-avoidance
@@ -2861,16 +2890,22 @@ function isPointOnRoad(x, y, pad) {
 // ground one of those already occupies in the first place.
 function removeRoadOverlaps() {
   trees = trees.filter(t => !isPointOnRoad(t.x, t.y, t.radius));
+  // Buildings and compounds are rectangular footprints, not circles - see
+  // aabbOverlapsRoad's own comment for why isPointOnRoad's circle-radius
+  // pad (what this used before) badly over-culled them: treating a
+  // building's own half-extent as a circle radius flagged nearly every
+  // building in a dense city as "overlapping" a nearby road even when its
+  // actual rectangular footprint had a perfectly real gap from the payment.
   buildings = buildings.filter(b => {
-    if (!b.footprint) return !isPointOnRoad(b.x, b.y, 30);
+    if (!b.footprint) return !aabbOverlapsRoad(b.x, b.y, 30, 30, 4);
     const cells = b.footprint.cells;
     const cellSize = b.footprint.cellSize;
     const minx = Math.min(...cells.map(c=>c[0])), maxx = Math.max(...cells.map(c=>c[0]));
     const miny = Math.min(...cells.map(c=>c[1])), maxy = Math.max(...cells.map(c=>c[1]));
     const hx = (maxx-minx+1)*cellSize/2, hy = (maxy-miny+1)*cellSize/2;
-    return !isPointOnRoad(b.x, b.y, Math.max(hx,hy));
+    return !aabbOverlapsRoad(b.x, b.y, hx, hy, 4);
   });
-  compounds = compounds.filter(c => !isPointOnRoad(c.x, c.y, Math.max(c.hx||30, c.hy||30)));
+  compounds = compounds.filter(c => !aabbOverlapsRoad(c.x, c.y, c.hx||30, c.hy||30, 4));
   // Mountains/lakes/crevasses are placed long before roads exist (roads are
   // the very last thing genTerrain lays down), so they can't check this
   // themselves at placement time the way everything above can - instead,
@@ -9210,7 +9245,7 @@ function spawnBurningDebris(x, y, radius) {
       rotation: Math.random()*Math.PI*2,
       born: now,
       flightDuration: 450 + Math.random()*350, // time to reach its landing point
-      burnDuration: 2500 + Math.random()*2500  // keeps glowing/smoldering after it lands, before fully going out
+      burnDuration: 2500 + Math.random()*2500  // burns as a small flame after it lands, before fading out
     });
   }
 }
@@ -9248,21 +9283,40 @@ function drawBurningDebris() {
       ctx.beginPath(); ctx.arc(0,0,chipSize*0.6,0,Math.PI*2); ctx.fill();
       ctx.restore();
     } else {
-      // Landed: a small glowing ember mark that flickers and slowly fades
-      // out over its own burnDuration.
+      // Landed: "instead of glowing embers flashing a few times, little
+      // flames that burn for a few seconds then one by one fade out" -
+      // burns at essentially full strength for most of its own burnDuration
+      // (a gentle flicker/wobble, not a hard flash), then fades out
+      // smoothly over its final stretch. Every chunk from the same
+      // explosion has its own independently randomized burnDuration (see
+      // spawnBurningDebris), so across several of them they naturally go
+      // out one at a time rather than all together or all flashing in
+      // lockstep.
       if (!isVisible(d.landX, d.landY)) return;
       const burnAge = age - d.flightDuration;
-      const alpha = Math.max(0, 1 - burnAge/d.burnDuration);
+      const fadeStart = d.burnDuration * 0.7; // stays lit for the first 70% of its life
+      const alpha = burnAge < fadeStart ? 1 : Math.max(0, 1 - (burnAge-fadeStart)/(d.burnDuration-fadeStart));
       if (alpha <= 0) return;
       const s = worldToScreen(d.landX, d.landY);
-      const flicker = 0.7 + 0.3*Math.sin(now/80 + d.born);
-      const glowR = d.size * camera.zoom * 1.8 * flicker;
-      const grad = ctx.createRadialGradient(s.x,s.y,0, s.x,s.y,glowR);
-      grad.addColorStop(0, `rgba(255,200,100,${alpha*0.9})`);
-      grad.addColorStop(0.5, `rgba(255,110,40,${alpha*0.5})`);
-      grad.addColorStop(1, 'rgba(200,60,20,0)');
+      // Gentle flicker (subtle wobble in size), not the old on/off flash
+      const wobble = 0.85 + 0.15*Math.sin(now/140 + d.born*0.013) + 0.08*Math.sin(now/57 + d.born*0.021);
+      const flameH = d.size * camera.zoom * 2.4 * wobble;
+      const flameW = flameH * 0.42;
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      // Simple flame silhouette: a teardrop tapering to a point overhead.
+      ctx.beginPath();
+      ctx.moveTo(0, flameH*0.15);
+      ctx.quadraticCurveTo(flameW, -flameH*0.1, 0, -flameH*0.85);
+      ctx.quadraticCurveTo(-flameW, -flameH*0.1, 0, flameH*0.15);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(0, flameH*0.15, 0, -flameH*0.85);
+      grad.addColorStop(0, `rgba(255,210,70,${alpha*0.95})`);
+      grad.addColorStop(0.5, `rgba(255,130,30,${alpha*0.9})`);
+      grad.addColorStop(1, `rgba(255,60,20,${alpha*0.5})`);
       ctx.fillStyle = grad;
-      ctx.beginPath(); ctx.arc(s.x,s.y,glowR,0,Math.PI*2); ctx.fill();
+      ctx.fill();
+      ctx.restore();
     }
   });
 }
@@ -10516,8 +10570,25 @@ function returnToLaunchScreen() {
   document.getElementById('resultOverlay').style.display = 'none';
   document.getElementById('resultFlash').classList.remove('show');
   gameOver = false;
-  // fully reset world state so a second Play or Test session starts clean
+  // fully reset world state so a second Play or Test session starts clean.
+  // blueBase/redBase are the same two persistent objects for the entire
+  // page session (see their `const` declaration near the top of the file)
+  // and are normally only ever pushed into `entities` ONCE, right when
+  // they're first created - so wiping the array here and not re-adding them
+  // left every SECOND (and later) match missing both bases entirely: they'd
+  // still exist and respond correctly to direct property access (hp,
+  // alive, position), which is exactly why this could slip past a check
+  // that only looks at blueBase.alive/x/y directly rather than also
+  // confirming the object is actually still in the array - but every place
+  // that finds bases by filtering `entities` (rendering chief among them,
+  // see the drawBase call site) would come up empty, making a base
+  // genuinely invisible and unusable despite "existing". Explicitly
+  // restoring them here is what makes returnToLaunchScreen safe to call
+  // more than once per page load - which used to be a rare path (only the
+  // Test-mode Done button), but is now the normal, expected way to end a
+  // match via the Surrender button too.
   entities.length = 0;
+  entities.push(blueBase, redBase);
   selected.clear();
   projectiles = [];
   explosions = [];
