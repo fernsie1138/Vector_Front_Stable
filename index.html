@@ -674,7 +674,6 @@
       <div class="cmdBtn disabled" id="btnBuyArtillery">ARTY<br><span id="buyArtilleryCost">60</span></div>
       <div class="cmdBtn disabled" id="btnBuyScout">SCOUT<br><span id="buyScoutCost">20</span></div>
       <div class="cmdBtn disabled" id="btnBuyAutoTank">AUTO<br><span id="buyAutoTankCost">30</span></div>
-      <div class="cmdBtn disabled" id="btnBuyTurret">TURRET<br><span id="buyTurretCost">60</span></div>
       <div class="cmdBtn disabled" id="btnBuyInfantry">INF<br><span id="buyInfantryCost">30</span></div>
       <div class="cmdBtn disabled" id="btnBuyMortar">MORTAR<br><span id="buyMortarCost">75</span></div>
       <div class="cmdBtn disabled" id="btnBuyBlockhouse">BLKHS<br><span id="buyBlockhouseCost">150</span></div>
@@ -785,7 +784,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 137;
+const GAME_VERSION = 139;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -2310,10 +2309,14 @@ const UNIT_STATS = {
   // at all unless deployed - simply standing still isn't enough, unlike
   // artillery's setup-time gate. React is 0 since a unit that never moves and
   // can't fire until explicitly deployed has no business being pulled into a
-  // fight via shared awareness from a passing ally.
+  // fight via shared awareness from a passing ally. No longer purchasable at
+  // the home base at all - "only can be built by Sappers" - see
+  // BUILDABLE_STRUCTURES (its cost there now references UNIT_STATS directly,
+  // the same way Watch Tower/Heavy Artillery already do, since it's no
+  // longer in UNIT_COSTS for that to point to).
   turret: {
-    cost: 60, hp: 120, armor: 12, damage: 20, fireCooldown: 0.5,
-    range: 220, sight: 240, react: 0, speed: 47.5, shellSpeed: 1500,
+    cost: 60, hp: 200, armor: 14, damage: 20, fireCooldown: 0.5,
+    range: 300, sight: 240, react: 0, speed: 47.5, shellSpeed: 1500,
     blastRadius: 0, setupTime: 10, canFireWhileMoving: false, collisionRadius: 15
   },
   // Infantry's armor is conditional: 5 normally, 13 while in defend mode. This
@@ -2382,7 +2385,7 @@ const UNIT_STATS = {
   // slowly. Splash damage (40px blast radius) makes it dangerous against
   // groups, not just single targets.
   mech: {
-    cost: 250, hp: 300, armor: 14, damage: 30, fireCooldown: 3,
+    cost: 250, hp: 300, armor: 14, damage: 30, fireCooldown: 1.5,
     range: 120, sight: 240, react: 500, speed: 30, shellSpeed: 200,
     blastRadius: 40, setupTime: 0, canFireWhileMoving: true, collisionRadius: 20
   },
@@ -2458,7 +2461,7 @@ const UNIT_STATS = {
   // longer-ranged weapon: cost 40, damage 35, fireCooldown 5s (0.2
   // shots/sec), range 200.
   atinfantry: {
-    cost: 40, hp: 100, armor: 5, damage: 35, fireCooldown: 5,
+    cost: 40, hp: 100, armor: 5, damage: 35, fireCooldown: 2.5,
     range: 200, sight: 200, react: 300, speed: 20, shellSpeed: 1050,
     blastRadius: 0, setupTime: 0, canFireWhileMoving: true, collisionRadius: 10
   },
@@ -2471,7 +2474,7 @@ const UNIT_STATS = {
   // - damage 50, fireCooldown 10s (0.1 shots/sec), range only 50, meaning
   // they need to get dangerously close before they can use it at all.
   sappers: {
-    cost: 40, hp: 100, armor: 5, damage: 50, fireCooldown: 10,
+    cost: 40, hp: 100, armor: 5, damage: 50, fireCooldown: 5,
     range: 50, sight: 200, react: 300, speed: 20, shellSpeed: 1050,
     blastRadius: 0, setupTime: 0, canFireWhileMoving: true, collisionRadius: 10
   },
@@ -2511,9 +2514,9 @@ const UNIT_STATS = {
   // "cannot fire on its own, must be ordered to attack ground". Field-built
   // by a Sapper only, never purchased directly at the home base.
   heavyartillery: {
-    cost: 800, hp: 450, armor: 14, damage: 37.5, fireCooldown: 9,
+    cost: 800, hp: 450, armor: 5, damage: 37.5, fireCooldown: 9,
     range: 840, sight: 460, react: 460, speed: 10, shellSpeed: 175,
-    blastRadius: 30, setupTime: 6, canFireWhileMoving: false, collisionRadius: 30,
+    blastRadius: 75, setupTime: 6, canFireWhileMoving: false, collisionRadius: 30,
     minRange: 150
   },
   // Embankment: identical stats to Barricade in every field below - the
@@ -2527,7 +2530,7 @@ const UNIT_STATS = {
   // blocking reach (lineBlockedByEmbankment uses this same radius), which
   // is the correct, consistent side effect of a literally bigger obstacle.
   embankment: {
-    cost: 0, hp: 500, armor: 15, damage: 0, fireCooldown: 1,
+    cost: 0, hp: 500, armor: 8, damage: 0, fireCooldown: 1,
     range: 0, sight: 200, react: 0, speed: 10, shellSpeed: 0,
     blastRadius: 0, setupTime: 20, canFireWhileMoving: false, collisionRadius: 40
   }
@@ -5213,7 +5216,15 @@ entities.push(blueBase, redBase);
 // way ownership changes is by capture.
 const SUPPLY_GEN_INTERVAL = 1.0; // seconds per point, per owned depot
 // Costs are read directly from the unit stats table so there's a single source of truth.
-const UNIT_COSTS = { tank: UNIT_STATS.tank.cost, artillery: UNIT_STATS.artillery.cost, scout: UNIT_STATS.scout.cost, autotank: UNIT_STATS.autotank.cost, turret: UNIT_STATS.turret.cost, infantry: UNIT_STATS.infantry.cost, mortar: UNIT_STATS.mortar.cost, blockhouse: UNIT_STATS.blockhouse.cost, mech: UNIT_STATS.mech.cost, assaulttank: UNIT_STATS.assaulttank.cost, apc: UNIT_STATS.apc.cost, lrmmech: UNIT_STATS.lrmmech.cost, siegemortar: UNIT_STATS.siegemortar.cost, atinfantry: UNIT_STATS.atinfantry.cost, sappers: UNIT_STATS.sappers.cost, medic: UNIT_STATS.medic.cost };
+// Turret is deliberately absent here - "change so only can be built by
+// Sappers" removed it from home-base purchase entirely (see
+// BUILDABLE_STRUCTURES, which now prices it from UNIT_STATS directly since
+// there's no UNIT_COSTS entry left to reference). Being out of UNIT_COSTS
+// also removes it from ALL_UNIT_TYPES below, so it no longer appears in the
+// Unit Options screen or the red AI's purchase pool - the same treatment
+// Watch Tower/Heavy Artillery/Embankment already have as Sapper-only
+// structures with no home-base equivalent.
+const UNIT_COSTS = { tank: UNIT_STATS.tank.cost, artillery: UNIT_STATS.artillery.cost, scout: UNIT_STATS.scout.cost, autotank: UNIT_STATS.autotank.cost, infantry: UNIT_STATS.infantry.cost, mortar: UNIT_STATS.mortar.cost, blockhouse: UNIT_STATS.blockhouse.cost, mech: UNIT_STATS.mech.cost, assaulttank: UNIT_STATS.assaulttank.cost, apc: UNIT_STATS.apc.cost, lrmmech: UNIT_STATS.lrmmech.cost, siegemortar: UNIT_STATS.siegemortar.cost, atinfantry: UNIT_STATS.atinfantry.cost, sappers: UNIT_STATS.sappers.cost, medic: UNIT_STATS.medic.cost };
 const TANK_COST = UNIT_COSTS.tank; // kept for any existing references
 let supply = { blue: 0, red: 0 };
 
@@ -5701,6 +5712,19 @@ function purchaseUnit(team, unitType) {
   // the player's buy buttons and every red AI purchase call through here.
   if (unitEnabled[team] && unitEnabled[team][unitType] === false) return false;
   const cost = UNIT_COSTS[unitType];
+  // A unit type with no UNIT_COSTS entry at all (Foxhole/Barricade/Watch
+  // Tower/Heavy Artillery/Embankment/Turret - all Sapper-field-build-only,
+  // never home-base-purchasable) must be rejected explicitly here: without
+  // this check, `cost` is undefined, `supply[team] < undefined` evaluates
+  // to false (NOT true) so the "can't afford it" guard below never fires,
+  // and `supply[team] -= undefined` silently corrupts the team's whole
+  // supply total to NaN while spawning the unit for free. This was a real,
+  // live exploit - "change so only can be built by Sappers" only removed
+  // Turret's UNIT_COSTS entry and buy button, and calling purchaseUnit
+  // directly (bypassing the now-absent button) still worked and broke
+  // supply. This check makes any future Sapper-only structure safe by
+  // construction too, not just Turret specifically.
+  if (cost === undefined) return false;
   if (supply[team] < cost) return false;
   const base = team==='blue' ? blueBase : redBase;
   if (!base.alive) return false; // no base, nowhere to produce from
@@ -6402,7 +6426,7 @@ function buildBuildMenu(eligibleUnits) {
   container.innerHTML = '';
   const availableKeys = new Set();
   eligibleUnits.forEach(t => getBuildableStructuresFor(t.unitType).forEach(([key]) => availableKeys.add(key)));
-  Object.keys(BUILDABLE_STRUCTURES).filter(key => availableKeys.has(key)).forEach(key => {
+  Object.keys(BUILDABLE_STRUCTURES).filter(key => availableKeys.has(key) && unitEnabled.blue[key] !== false).forEach(key => {
     const cfg = BUILDABLE_STRUCTURES[key];
     const btn = document.createElement('button');
     // Foxhole/Barricade cost nothing but the builder's own time. Turret
@@ -6541,9 +6565,6 @@ document.getElementById('btnBuyScout').addEventListener('click', ()=>{
 });
 document.getElementById('btnBuyAutoTank').addEventListener('click', ()=>{
   purchaseUnit('blue', 'autotank');
-});
-document.getElementById('btnBuyTurret').addEventListener('click', ()=>{
-  purchaseUnit('blue', 'turret');
 });
 document.getElementById('btnBuyInfantry').addEventListener('click', ()=>{
   purchaseUnit('blue', 'infantry');
@@ -6766,10 +6787,28 @@ let projectiles = [];
 let explosions = []; // active explosion visual effects: {x, y, radius, born}
 let impactFlashes = []; // small direct-fire impact bursts: {x, y, size, born, duration}
 
+// Target priority for automatic target acquisition - "all units prioritize
+// attacking Infantry and vehicles first, and Embankments, Barricades, and
+// Foxholes last". Lower number = higher priority. Everything not
+// explicitly named (Turret, Blockhouse, Watch Tower, and the
+// artillery/mech-family units, plus the enemy base itself) sits in the
+// middle tier: still preferred over the three passive obstacle-structures
+// at the bottom, but not as urgent as the enemy's actual fighting force.
+// This only governs AUTOMATIC target selection (findNearestEnemyInSight/
+// findReactableEnemy below) - a target the player explicitly clicked via
+// Attack is never second-guessed by this.
+const TOP_PRIORITY_TARGET_TYPES = new Set(['tank','scout','autotank','assaulttank','apc','infantry','atinfantry','sappers','medic']);
+const LOW_PRIORITY_TARGET_TYPES = new Set(['embankment','barricade','foxhole']);
+function targetPriorityTier(e) {
+  if (LOW_PRIORITY_TARGET_TYPES.has(e.unitType)) return 2;
+  if (TOP_PRIORITY_TARGET_TYPES.has(e.unitType)) return 0;
+  return 1; // bases, Turret/Blockhouse/Watch Tower, and every artillery/mech-family unit
+}
+
 // Find nearest alive enemy of a unit within its sight range, with mountains blocking sight/fire
 function findNearestEnemyInSight(t) {
   const oppTeam = t.team==='blue' ? 'red' : 'blue';
-  let best=null, bd=Infinity;
+  let best=null, bd=Infinity, bestTier=Infinity;
   entities.forEach(e=>{
     if (!e.alive || e.team!==oppTeam) return;
     if (e.kind!=='tank' && e.kind!=='base') return; // supply depots are indestructible and never attackable
@@ -6794,8 +6833,14 @@ function findNearestEnemyInSight(t) {
     // own.
     const detectionRange = getDetectionRangeFor(e);
     const effectiveSight = detectionRange !== null ? detectionRange : t.sight;
-    if (d <= effectiveSight && d<bd && !lineBlockedBySight(t.x,t.y,e.x,e.y)) {
-      bd = d; best = e;
+    if (d <= effectiveSight && !lineBlockedBySight(t.x,t.y,e.x,e.y)) {
+      const tier = targetPriorityTier(e);
+      // A higher-priority-tier target always wins outright, even if it's
+      // farther away than something in a lower tier already found - only
+      // WITHIN the same tier does distance break the tie.
+      if (tier < bestTier || (tier === bestTier && d < bd)) {
+        bd = d; best = e; bestTier = tier;
+      }
     }
   });
   return best;
@@ -6810,7 +6855,7 @@ function findNearestEnemyInSight(t) {
 function findReactableEnemy(t) {
   const reactRadius = t.react;
   const allies = entities.filter(e => e.alive && e.kind==='tank' && e.team===t.team);
-  let best=null, bd=Infinity;
+  let best=null, bd=Infinity, bestTier=Infinity;
   allies.forEach(ally=>{
     if (ally===t) return;
     const allyToT = Math.hypot(ally.x-t.x, ally.y-t.y);
@@ -6818,7 +6863,12 @@ function findReactableEnemy(t) {
     const spotted = findNearestEnemyInSight(ally);
     if (!spotted) return;
     const d = Math.hypot(spotted.x-t.x, spotted.y-t.y);
-    if (d <= reactRadius && d<bd) { bd = d; best = spotted; }
+    if (d <= reactRadius) {
+      const tier = targetPriorityTier(spotted);
+      if (tier < bestTier || (tier === bestTier && d < bd)) {
+        bd = d; best = spotted; bestTier = tier;
+      }
+    }
   });
   return best;
 }
@@ -6888,6 +6938,18 @@ const ESCORTS_PER_CAPTURER = 2; // Tank/Artillery sent along with each Infantry 
 // exclusion list.
 const ALL_UNIT_TYPES = Object.keys(UNIT_COSTS);
 
+// Every buildable/purchasable thing in the game, home-base-purchased or
+// Sapper/Infantry-field-built alike - "make sure all units are featured in
+// the Unit Options list" needs a broader set than ALL_UNIT_TYPES above
+// (which is deliberately just the home-base-purchasable subset, still used
+// as-is for the buy row and the AI's purchase pool). Derived from
+// UNIT_STATS directly (declared well before this point in the file) rather
+// than UNIT_DISPLAY_ORDER, which reads more naturally for this but is
+// declared much later - referencing it here would fail with the exact
+// "accessed before initialization" crash a `let`/`const` declared later in
+// the file always throws if read too early.
+const ALL_SPAWNABLE_TYPES = Object.keys(UNIT_STATS);
+
 // Per-team unit availability, set from the "Unit Options" screen in New Game
 // setup (every type defaults to enabled for both teams). Gated centrally in
 // purchaseUnit() below, which is the single choke point both the player's
@@ -6895,15 +6957,19 @@ const ALL_UNIT_TYPES = Object.keys(UNIT_COSTS);
 // unit there is enough on its own to make it unbuyable for that team. Red's
 // own target-picking (pickWeightedPurchaseTarget and the near-cap spend-down
 // below) additionally skips disabled types so the AI doesn't keep wastefully
-// committing to something it isn't allowed to buy.
+// committing to something it isn't allowed to buy. Field-built structures
+// (Foxhole, Barricade, Turret, Watch Tower, Heavy Artillery, Embankment) are
+// gated the same way, but at their own completion point in updateTank and
+// via buildBuildMenu hiding a disabled option, since they never go through
+// purchaseUnit at all.
 const unitEnabled = { blue: {}, red: {} };
-ALL_UNIT_TYPES.forEach(type => { unitEnabled.blue[type] = true; unitEnabled.red[type] = true; });
+ALL_SPAWNABLE_TYPES.forEach(type => { unitEnabled.blue[type] = true; unitEnabled.red[type] = true; });
 // Maps each purchasable type to its buy-button element id, so the per-frame
 // button-state update below (and the Unit Options hide/show) can be one
 // small loop instead of one hand-written block per unit.
 const BUY_BUTTON_IDS = {
   tank: 'btnBuyTank', artillery: 'btnBuyArtillery', scout: 'btnBuyScout', autotank: 'btnBuyAutoTank',
-  turret: 'btnBuyTurret', infantry: 'btnBuyInfantry', mortar: 'btnBuyMortar', blockhouse: 'btnBuyBlockhouse',
+  infantry: 'btnBuyInfantry', mortar: 'btnBuyMortar', blockhouse: 'btnBuyBlockhouse',
   mech: 'btnBuyMech', assaulttank: 'btnBuyAssaultTank', apc: 'btnBuyAPC',
   lrmmech: 'btnBuyLRMMech', siegemortar: 'btnBuySiegeMortar', atinfantry: 'btnBuyATInfantry', sappers: 'btnBuySappers',
   medic: 'btnBuyMedic'
@@ -6911,7 +6977,7 @@ const BUY_BUTTON_IDS = {
 
 const RED_PURCHASE_WEIGHTS = {
   infantry: 5, tank: 3, artillery: 3, mech: 2, assaulttank: 2, lrmmech: 1,
-  blockhouse: 2, turret: 2, mortar: 2, apc: 1,
+  blockhouse: 2, mortar: 2, apc: 1,
   scout: 1, autotank: 1,
   siegemortar: 2, atinfantry: 2, sappers: 2
 };
@@ -6937,7 +7003,7 @@ const RED_PURCHASE_WEIGHTS = {
 const RED_PURCHASE_WEIGHTS_AGGRESSIVE = {
   infantry: 5, tank: 5, mech: 4, assaulttank: 4, lrmmech: 2, autotank: 3, scout: 3,
   artillery: 2,
-  blockhouse: 1, turret: 1, mortar: 1, apc: 1,
+  blockhouse: 1, mortar: 1, apc: 1,
   // Siege Mortar is weighted the same low priority as Blockhouse/Turret/
   // Mortar here - it's a deploy-and-garrison structure, which aggressive
   // mode has little use for mid-raid, but it still needs a nonzero weight
@@ -8357,11 +8423,12 @@ function resolveUnitCollisions() {
 const BUILDABLE_STRUCTURES = {
   foxhole: { label: 'Foxhole', buildTime: 30, builtBy: ['infantry','sappers'] },
   barricade: { label: 'Barricade', buildTime: 30, builtBy: ['sappers'] },
-  // "the same cost as producing at home base" - references UNIT_COSTS.turret
-  // directly rather than a separate hardcoded number, so a balance change to
-  // Turret's normal purchase price automatically applies here too. 30
-  // second build time, same as Foxhole/Barricade.
-  turret: { label: 'Turret', buildTime: 30, builtBy: ['sappers'], cost: UNIT_COSTS.turret },
+  // Turret is no longer purchasable at the home base at all - "only can be
+  // built by Sappers" - so, like Watch Tower/Heavy Artillery below, its cost
+  // here references UNIT_STATS directly rather than UNIT_COSTS (which no
+  // longer has a turret entry to reference). 30 second build time, same as
+  // Foxhole/Barricade.
+  turret: { label: 'Turret', buildTime: 30, builtBy: ['sappers'], cost: UNIT_STATS.turret.cost },
   // Watch Tower, Heavy Artillery and Embankment are never purchased at the
   // home base at all (they have no buy-row button and no UNIT_COSTS entry -
   // same treatment as Foxhole/Barricade) - Sapper field-building is the
@@ -8515,8 +8582,19 @@ function updateTank(t, dt, now) {
     const structureCfg = BUILDABLE_STRUCTURES[buildingType] || BUILDABLE_STRUCTURES.foxhole;
     t.buildProgress += dt;
     if (t.buildProgress >= structureCfg.buildTime) {
-      const structure = makeTank(t.team, t.x, t.y, buildingType);
-      entities.push(structure);
+      // "Make sure the restricted units cannot be spawned" applies here too,
+      // not just to purchaseUnit - the Build menu button for a disabled
+      // structure is already hidden (see buildBuildMenu), so this is a
+      // defensive safety net for edge cases the menu can't catch (a type
+      // disabled mid-build, or an in-flight build resumed from a save made
+      // before the restriction was set). The builder is simply freed up
+      // with nothing to show for the time spent - supply already spent at
+      // confirm time (Turret/Watch Tower/Heavy Artillery) is not refunded,
+      // same as any other wasted action.
+      if (!unitEnabled[t.team] || unitEnabled[t.team][buildingType] !== false) {
+        const structure = makeTank(t.team, t.x, t.y, buildingType);
+        entities.push(structure);
+      }
       t.isBuilding = false;
       t.buildProgress = 0;
       t.buildingType = null;
@@ -8572,18 +8650,31 @@ function updateTank(t, dt, now) {
       const inSight = directSight || withinReact;
 
       // Auto-acquired targets are dropped as soon as they leave sight/react,
-      // same as before. Player-ordered targets are normally kept regardless of
-      // range, since a chasing unit is actively closing the distance and will
-      // eventually catch up - but a unit that can't chase at all (holds ground)
-      // has no way to ever close that gap, so an unreachable player-ordered
-      // target must be droppable too, or it permanently blocks the unit from
-      // ever picking up a new target again. A target sitting inside minRange
-      // (Artillery/Mortar only) is just as unreachable for a non-chasing unit
-      // as one too far away - it will never back up to open the distance, so
-      // without this check it would stand there aiming at point-blank range
-      // forever, unable to fire and unable to pick up anything else.
+      // same as before - an auto-picked target was only ever found within
+      // sight to begin with (see findNearestEnemyInSight), so losing sight
+      // of it is a real, meaningful loss of track for that case.
+      //
+      // Player-ordered targets are judged differently: whether a stationary
+      // (non-chasing) unit can still reach one is a question of WEAPON
+      // RANGE, not sight range - sight only matters for auto-acquiring a
+      // target in the first place, never for holding onto one the player
+      // already committed the unit to. Indirect-fire weapons in particular
+      // (Artillery, Mortar, Siege Mortar, Heavy Artillery) are meant to hit
+      // targets well beyond visual range - "fire beyond its sight range,
+      // even into the black area of unrevealed terrain" - and Heavy
+      // Artillery especially, whose 840 weapon range is nearly double its
+      // 460 sight, was being cut off at sight range entirely: the instant a
+      // manually-ordered Attack Ground point beyond 460 was issued, this
+      // check used to see it as "unreachable" (judged by sight, not range)
+      // and clear it again before a single shot ever fired. A target sitting
+      // inside minRange (Artillery/Mortar-family only) is just as
+      // unreachable for a non-chasing unit as one too far away - it will
+      // never back up to open the distance, so without this check it would
+      // stand there aiming at point-blank range forever, unable to fire and
+      // unable to pick up anything else.
+      const withinWeaponReach = d <= t.range && !lineBlockedBySight(t.x,t.y,t.attackTarget.x,t.attackTarget.y);
       const tooClose = (t.minRange || 0) > 0 && d < t.minRange;
-      const targetUnreachable = (!t.canFireWhileMoving && !directSight) || (!t.canFireWhileMoving && tooClose);
+      const targetUnreachable = (!t.canFireWhileMoving && !withinWeaponReach) || (!t.canFireWhileMoving && tooClose);
       if ((t.autoEngaged && !inSight) || targetUnreachable) {
         // lost an auto-acquired target, or a stationary unit's target moved
         // out of reach entirely - drop it either way
@@ -10363,7 +10454,7 @@ const UNIT_DESCRIPTIONS = {
   artillery: { label: 'Artillery', text: 'Long-ranged indirect fire support. Must stop and set up before firing, and can\'t hit anything too close to itself, but hits hard with splash damage from well outside the range of most defenses.' },
   scout: { label: 'Scout', text: 'Fast and lightly armed, with by far the longest sight range of any unit. Best used to reveal enemy positions and territory rather than to fight directly.' },
   autotank: { label: 'Auto Tank', text: 'A fast-firing light autocannon vehicle. Individually fragile, but its rapid rate of fire adds up quickly in numbers.' },
-  turret: { label: 'Turret', text: 'A stationary defensive emplacement. Cannot move once deployed and cannot fire at all until it is - order it to Defend to dig it in permanently.' },
+  turret: { label: 'Turret', text: 'A stationary defensive emplacement. Cannot move once deployed and cannot fire at all until it is - order it to Defend to dig it in permanently. Only a Sapper can build one, out in the field - it is not purchased at the home base.' },
   infantry: { label: 'Infantry', text: 'Cheap, versatile foot soldiers. The only unit that can capture supply depots or build a Foxhole, and gains bonus armor while defending. Can also go unseen near trees and buildings if left stationary.' },
   mortar: { label: 'Mortar', text: 'Indirect splash-damage support with very long range, similar in role to Artillery but weaker per-shot and slower firing. Cannot hit targets that are too close.' },
   blockhouse: { label: 'Blockhouse', text: 'A heavily armored deployable strongpoint with very high hit points. Slow to dig in and only lightly armed, but extremely difficult to destroy once dug in.' },
@@ -10374,7 +10465,7 @@ const UNIT_DESCRIPTIONS = {
   lrmmech: { label: 'LRM Mech', text: 'A large walker armed with a long-range rocket salvo instead of a single weapon, firing several rockets at once that can scatter across a cluster of targets. Very expensive, but hits harder than anything else at range.' },
   siegemortar: { label: 'Siege Mortar', text: 'A Blockhouse with an attached mortar - the same long-range splash weapon as Mortar, carried on a far tougher chassis. Cannot fire until deployed, and cannot move once deployed.' },
   atinfantry: { label: 'AT Infantry', text: 'Anti-tank infantry armed with a slow-firing but hard-hitting weapon and a longer reach than regular Infantry. Shares Infantry\'s concealment near trees, buildings, and foxholes, but cannot build.' },
-  sappers: { label: 'Sappers', text: 'Engineers and demolition experts armed with short-range satchel charges that deal heavy damage up close. Like Infantry, they can build a Foxhole or a Barricade, and can also send one out to repair a damaged friendly vehicle or structure in the field via Build > Repair (Infantry-class units need a Medic\'s Heal instead) - it holds still (and can\'t fire) while being worked on, until it\'s fully healed or given a new order. Sappers can also demolish a friendly unit or structure that\'s no longer needed via Build > Demolish, and are the only unit that can build a Turret, a Watch Tower, Heavy Artillery, or an Embankment in the field - Turret, Watch Tower and Heavy Artillery cost the same supply as buying the equivalent at the home base (Heavy Artillery has no home-base equivalent, so it\'s priced on its own), while Foxhole, Barricade and Embankment cost nothing but the Sapper\'s own time.' },
+  sappers: { label: 'Sappers', text: 'Engineers and demolition experts armed with short-range satchel charges that deal heavy damage up close. Like Infantry, they can build a Foxhole or a Barricade, and can also send one out to repair a damaged friendly vehicle or structure in the field via Build > Repair (Infantry-class units need a Medic\'s Heal instead) - it holds still (and can\'t fire) while being worked on, until it\'s fully healed or given a new order. Sappers can also demolish a friendly unit or structure that\'s no longer needed via Build > Demolish, and are the only unit that can build a Turret, a Watch Tower, Heavy Artillery, or an Embankment - none of these four are purchased at the home base at all, only ever built by a Sapper in the field, while Foxhole, Barricade and Embankment cost nothing but the Sapper\'s own time.' },
   barricade: { label: 'Barricade', text: 'A built obstacle with no weapon of its own that blocks every unit until destroyed. Built by Sappers, it locks permanently in place once deployed and never turns to face the enemy.' },
   // Medic: same role in the Heal pipeline that Sappers play for Repair, just
   // restricted to the opposite set of targets - see INFANTRY_CLASS_TYPES.
@@ -10499,17 +10590,21 @@ document.getElementById('btnOptionsConfirm').addEventListener('click', ()=>{
 });
 
 // ---------- Unit Options screen ----------
-// One row per purchasable unit type (ALL_UNIT_TYPES, the same set the buy
-// row and red's own purchase logic use) in each of two columns, checked by
-// default. Built once, like buildUnitCards - the checkboxes themselves just
-// read/write the shared unitEnabled object directly, so no separate "apply"
-// step is needed; unchecking one takes effect immediately (purchaseUnit
-// gates on it), including mid-game if this screen is ever reopened.
+// One row per EVERY buildable/purchasable type in the game (ALL_SPAWNABLE_
+// TYPES - home-base-purchased units and Sapper/Infantry-field-built
+// structures alike, "make sure all units are featured in the Unit Options
+// list"), in each of two columns, checked by default. Built once, like
+// buildUnitCards - the checkboxes themselves just read/write the shared
+// unitEnabled object directly, so no separate "apply" step is needed;
+// unchecking one takes effect immediately (purchaseUnit gates on it for
+// purchasable types, the build-completion check in updateTank and
+// buildBuildMenu's own hiding gate it for field-built structures),
+// including mid-game if this screen is ever reopened.
 function buildUnitOptionsScreen() {
   const blueList = document.getElementById('unitOptionsBlueList');
   const redList = document.getElementById('unitOptionsRedList');
   if (blueList.childElementCount > 0) return; // build once
-  ALL_UNIT_TYPES.forEach(type => {
+  ALL_SPAWNABLE_TYPES.forEach(type => {
     const label = (UNIT_DESCRIPTIONS[type] && UNIT_DESCRIPTIONS[type].label) || type;
     [['blue', blueList], ['red', redList]].forEach(([team, list]) => {
       const row = document.createElement('label');
@@ -10777,7 +10872,7 @@ function applyLoadedGame(data) {
   if (data.unitEnabled && typeof data.unitEnabled === 'object') {
     ['blue','red'].forEach(team => {
       const saved = data.unitEnabled[team];
-      ALL_UNIT_TYPES.forEach(type => {
+      ALL_SPAWNABLE_TYPES.forEach(type => {
         unitEnabled[team][type] = (saved && typeof saved === 'object' && saved[type] !== undefined) ? !!saved[type] : true;
       });
     });
