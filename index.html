@@ -651,6 +651,7 @@
       <input type="file" id="loadFileInput" accept="application/json,.json" style="display:none">
       <div class="iconBtn" id="btnReveal">REVEAL</div>
       <div class="iconBtn" id="btnHard">HARD</div>
+      <div class="iconBtn" id="btnSurrender">SURRENDER</div>
     </div>
     <div class="teamStat"><span id="redBase">100%</span> · <span id="redCount">5</span> units<span class="teamDot redDot"></span></div>
     <div id="redSupplyCounter"><span id="redSupplyValue">0</span> supply</div>
@@ -784,7 +785,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 139;
+const GAME_VERSION = 140;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -5822,6 +5823,7 @@ function startTestMode() {
   lingeringSmoke = [];
   wrecks = [];
   flameSmoke = [];
+  burningDebris = [];
   compounds = [];
   markers = [];
   damageCtx.clearRect(0, 0, damageCanvas.width, damageCanvas.height);
@@ -6644,10 +6646,20 @@ function damageEntity(e, rawDmg) {
     e.hp = 0;
     if (e.kind==='tank') {
       selected.delete(e);
-      // Every vehicle gets the same explosion effect used for artillery/mortar
-      // blasts (shockwave, debris, and the lingering smoke that follows) when
-      // it's destroyed, sized to roughly match the unit's own footprint.
-      spawnExplosion(e.x, e.y, Math.max(24, e.radius*1.6));
+      // "When a vehicle (not Infantry) is destroyed, have it explode and
+      // throw burning debris about - more dramatic than the current
+      // explosion, although keep the current explosion for hits that don't
+      // destroy." Every non-lethal splash hit elsewhere in the file still
+      // calls spawnExplosion directly and is completely unaffected - this
+      // branch only fires at the moment of death, and only upgrades the
+      // effect for anything that ISN'T Infantry-class (see
+      // INFANTRY_CLASS_TYPES) - i.e. every vehicle, mech, siege unit, and
+      // structure, exactly the "not Infantry" half of the instruction.
+      if (INFANTRY_CLASS_TYPES.has(e.unitType)) {
+        spawnExplosion(e.x, e.y, Math.max(24, e.radius*1.6));
+      } else {
+        spawnVehicleDeathExplosion(e.x, e.y, Math.max(24, e.radius*1.6));
+      }
       // Leaves a burning wreck at the death site - a distinct, longer-lived
       // element from the explosion's own short shockwave/debris and the
       // lingering smoke that follows a normal blast. The wreck uses the
@@ -9162,6 +9174,100 @@ function updateExplosions() {
 }
 
 // ---------------------------------------------------------------------------
+// Vehicle destruction: "when a vehicle (not Infantry) is destroyed, have it
+// explode and throw burning debris about - more dramatic than the current
+// explosion, although keep the current explosion for hits that don't
+// destroy." damageEntity's death branch calls THIS instead of plain
+// spawnExplosion whenever the destroyed entity isn't Infantry-class (see
+// INFANTRY_CLASS_TYPES) - every non-lethal splash hit anywhere else in the
+// file still calls spawnExplosion directly, completely unchanged. This
+// layers on top of the normal explosion (bigger radius, so the shockwave/
+// crater/tree-and-building damage/standard debris all read as a genuinely
+// bigger blast) plus a second, distinct wave of actual flying burning
+// debris chunks - these travel much farther than spawnExplosion's own quick
+// 50px-fade chips, and keep glowing where they land for a few seconds
+// afterward, rather than vanishing the instant the blast itself ends.
+// ---------------------------------------------------------------------------
+function spawnVehicleDeathExplosion(x, y, radius) {
+  spawnExplosion(x, y, radius * 1.6);
+  spawnBurningDebris(x, y, radius);
+}
+
+let burningDebris = []; // flying flaming chunks thrown by a vehicle's death explosion - separate from spawnExplosion's own short-range debris chips
+
+function spawnBurningDebris(x, y, radius) {
+  const now = performance.now();
+  const count = 7 + Math.floor(Math.random()*4); // 7-10 chunks
+  for (let i=0;i<count;i++) {
+    const ang = Math.random()*Math.PI*2;
+    const dist = radius*1.8 + Math.random()*radius*2.2; // travels well beyond the blast itself - "throw burning debris about"
+    burningDebris.push({
+      x, y,
+      landX: x + Math.cos(ang)*dist,
+      landY: y + Math.sin(ang)*dist,
+      size: 5 + Math.random()*7,
+      spin: (Math.random()*2-1) * 10,
+      rotation: Math.random()*Math.PI*2,
+      born: now,
+      flightDuration: 450 + Math.random()*350, // time to reach its landing point
+      burnDuration: 2500 + Math.random()*2500  // keeps glowing/smoldering after it lands, before fully going out
+    });
+  }
+}
+
+function updateBurningDebris() {
+  const now = performance.now();
+  burningDebris = burningDebris.filter(d => now - d.born < d.flightDuration + d.burnDuration);
+}
+
+function drawBurningDebris() {
+  const now = performance.now();
+  burningDebris.forEach(d => {
+    const age = now - d.born;
+    if (age < d.flightDuration) {
+      // In flight: eases outward toward its landing point, with a small
+      // screen-space "hop" for a bit of visual arc rather than sliding flat
+      // along the ground the whole way.
+      if (!isVisible(d.x, d.y) && !isVisible(d.landX, d.landY)) return;
+      const p = age / d.flightDuration;
+      const ease = 1 - (1-p)*(1-p);
+      const wx = d.x + (d.landX-d.x)*ease;
+      const wy = d.y + (d.landY-d.y)*ease;
+      const hop = Math.sin(p*Math.PI) * 18;
+      const s = worldToScreen(wx, wy);
+      const rot = d.rotation + d.spin*p;
+      const chipSize = d.size*camera.zoom;
+      ctx.save();
+      ctx.translate(s.x, s.y - hop*camera.zoom);
+      ctx.rotate(rot);
+      const grad = ctx.createRadialGradient(0,0,0, 0,0,chipSize*0.8);
+      grad.addColorStop(0, 'rgba(255,250,220,1)');
+      grad.addColorStop(0.5, 'rgba(255,150,50,1)');
+      grad.addColorStop(1, 'rgba(120,40,20,0.8)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(0,0,chipSize*0.6,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+    } else {
+      // Landed: a small glowing ember mark that flickers and slowly fades
+      // out over its own burnDuration.
+      if (!isVisible(d.landX, d.landY)) return;
+      const burnAge = age - d.flightDuration;
+      const alpha = Math.max(0, 1 - burnAge/d.burnDuration);
+      if (alpha <= 0) return;
+      const s = worldToScreen(d.landX, d.landY);
+      const flicker = 0.7 + 0.3*Math.sin(now/80 + d.born);
+      const glowR = d.size * camera.zoom * 1.8 * flicker;
+      const grad = ctx.createRadialGradient(s.x,s.y,0, s.x,s.y,glowR);
+      grad.addColorStop(0, `rgba(255,200,100,${alpha*0.9})`);
+      grad.addColorStop(0.5, `rgba(255,110,40,${alpha*0.5})`);
+      grad.addColorStop(1, 'rgba(200,60,20,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(s.x,s.y,glowR,0,Math.PI*2); ctx.fill();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Burning wreck system: a destroyed unit/building leaves a charred wreck
 // sprite at its death position for a long time (WRECK_LINGER_TIME, a few
 // minutes) before fading out, with an active fire+smoke effect for a
@@ -9218,13 +9324,18 @@ const FLAME_MAX_DURATION = 240000; // ms - longest possible burn (4 minutes, com
 let flameSmoke = []; // black smoke puffs drifting off a burning wreck - separate array from lingeringSmoke since the drift/fade behavior differs
 
 // Spawns one black smoke puff drifting off a burning wreck. Per spec: drifts
-// toward the right of screen for about 50-100px total travel, then fades
+// toward the right of screen for about 100-200px total travel, then fades
 // out slowly - a much longer, more deliberate drift than the quick blast
 // smoke elsewhere, since this represents a steady, sustained burn rather
-// than a one-off puff from an explosion.
+// than a one-off puff from an explosion. Drift distance and duration are
+// both doubled from the original 50-100px/3.5-6s figures - "smoke from
+// destroyed units and buildings should drift twice as far and for twice as
+// long" - this one function is shared by wrecks, burning trees, and burning
+// buildings alike (see updateWreckFlames/updateTreeFlames/
+// updateBuildingFlames), so the change applies uniformly across all three.
 function spawnFlameSmoke(w) {
-  const totalDriftPx = 50 + Math.random()*50; // 50-100px total rightward travel over the puff's life
-  const duration = 3500 + Math.random()*2500; // slow drift+fade, several seconds per puff
+  const totalDriftPx = 100 + Math.random()*100; // 100-200px total rightward travel over the puff's life
+  const duration = 7000 + Math.random()*5000; // slow drift+fade, several seconds per puff
   flameSmoke.push({
     x: w.x + (Math.random()*2-1)*w.radius*0.3,
     y: w.y + (Math.random()*2-1)*w.radius*0.3,
@@ -10415,6 +10526,7 @@ function returnToLaunchScreen() {
   lingeringSmoke = [];
   wrecks = [];
   flameSmoke = [];
+  burningDebris = [];
   markers = [];
   damageCtx.clearRect(0, 0, damageCanvas.width, damageCanvas.height);
   supply.blue = 0; supply.red = 0;
@@ -10425,6 +10537,16 @@ function returnToLaunchScreen() {
   revealAll = false;
   document.getElementById('btnReveal').classList.remove('active');
   document.getElementById('launchScreen').style.display = 'flex';
+}
+// "Add a Surrender button... this will end the game and take the player
+// back to the title screen." Reuses the exact same full reset
+// returnToLaunchScreen already does for the Test-mode DONE button - ending
+// a match this way and ending one by walking away from a Test session are
+// the same underlying action (stop now, go back to the title screen with a
+// clean slate), so this doesn't need its own separate reset logic.
+function doSurrender() {
+  showToast('You surrendered');
+  returnToLaunchScreen();
 }
 document.getElementById('btnNewGame').addEventListener('click', ()=>{
   document.getElementById('launchScreen').style.display = 'none';
@@ -10915,6 +11037,7 @@ function applyLoadedGame(data) {
   explosions = [];
   lingeringSmoke = [];
   flameSmoke = [];
+  burningDebris = [];
   markers = [];
 
   // Restore the save's actual map dimensions BEFORE regenerating terrain or
@@ -11208,6 +11331,9 @@ document.getElementById('btnSave').addEventListener('click', saveGame);
 document.getElementById('btnLoad').addEventListener('click', ()=>{
   if (!localStorage.getItem(SAVE_KEY)) { showToast('No saved game found'); return; }
   pendingFileLoad = null; // this is the quick-load path, not a file - make sure a stale pending file from a previous LOAD FILE click can't get used instead
+  pendingSurrender = false; // make sure a stale Surrender confirmation from earlier can't fire instead
+  document.getElementById('confirmText').textContent = 'Loading will discard your current progress. Continue?';
+  document.getElementById('btnConfirmYes').textContent = 'LOAD';
   document.getElementById('confirmOverlay').style.display = 'flex';
 });
 // LOAD FILE: opens the actual OS file picker (via the hidden <input
@@ -11218,6 +11344,21 @@ document.getElementById('btnLoad').addEventListener('click', ()=>{
 // a file is subject to the same "are you sure, this replaces your current
 // match" safety check, rather than applying instantly on file selection.
 let pendingFileLoad = null;
+// "Add a Surrender button with popup that says 'Are you sure?'. This will
+// end the game and take the player back to the title screen." - reuses the
+// exact same confirmOverlay as Load/Load File above (see btnConfirmYes/
+// btnConfirmCancel below, now a three-way branch), just with its own
+// message/button text and its own pending-action flag, so confirming one
+// action can never accidentally trigger a different one left pending from
+// before.
+let pendingSurrender = false;
+document.getElementById('btnSurrender').addEventListener('click', ()=>{
+  pendingFileLoad = null;
+  pendingSurrender = true;
+  document.getElementById('confirmText').textContent = 'Are you sure?';
+  document.getElementById('btnConfirmYes').textContent = 'SURRENDER';
+  document.getElementById('confirmOverlay').style.display = 'flex';
+});
 document.getElementById('btnLoadFile').addEventListener('click', ()=>{
   document.getElementById('loadFileInput').click();
 });
@@ -11226,6 +11367,9 @@ document.getElementById('loadFileInput').addEventListener('change', (ev)=>{
   ev.target.value = ''; // reset so selecting the exact same file again still fires a change event next time
   if (!file) return;
   pendingFileLoad = file;
+  pendingSurrender = false;
+  document.getElementById('confirmText').textContent = 'Loading will discard your current progress. Continue?';
+  document.getElementById('btnConfirmYes').textContent = 'LOAD';
   document.getElementById('confirmOverlay').style.display = 'flex';
 });
 document.getElementById('btnReveal').addEventListener('click', ()=>{
@@ -11250,10 +11394,14 @@ document.getElementById('btnToggleCommandBar').addEventListener('click', ()=>{
 document.getElementById('btnConfirmCancel').addEventListener('click', ()=>{
   document.getElementById('confirmOverlay').style.display = 'none';
   pendingFileLoad = null;
+  pendingSurrender = false;
 });
 document.getElementById('btnConfirmYes').addEventListener('click', ()=>{
   document.getElementById('confirmOverlay').style.display = 'none';
-  if (pendingFileLoad) {
+  if (pendingSurrender) {
+    pendingSurrender = false;
+    doSurrender();
+  } else if (pendingFileLoad) {
     loadGameFromFile(pendingFileLoad);
     pendingFileLoad = null;
   } else {
@@ -11320,6 +11468,7 @@ function gameLoop(now) {
     updateLRMLaunchQueues(dt);
     updateProjectiles(dt);
     updateExplosions();
+    updateBurningDebris();
     updateWrecks(dt);
     updateImpactFlashes();
     updateMuzzleFlashes();
@@ -11353,6 +11502,7 @@ function gameLoop(now) {
     updateLRMLaunchQueues(dt);
     updateProjectiles(dt);
     updateExplosions();
+    updateBurningDebris();
     updateWrecks(dt);
     updateTreeFlames(dt);
     updateBuildingFlames(dt);
@@ -11774,6 +11924,8 @@ function render() {
       });
     }
   });
+
+  drawBurningDebris();
 
   // small-caliber impact flashes: a brief, tiny burst where a direct-fire round
   // (tank, auto-tank, infantry, scout) lands, distinct from the larger splash
