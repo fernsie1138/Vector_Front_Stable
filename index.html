@@ -579,6 +579,7 @@
     </div>
     <div class="optionRow">
       <button class="optionBtn" id="optBiomeFortressCity" data-group="biome" data-value="fortressCity">FORTRESS CITY</button>
+      <button class="optionBtn" id="optBiomeJungle" data-group="biome" data-value="jungle">JUNGLE</button>
     </div>
   </div>
   <button class="launchBtn" id="btnUnitOptions" style="margin-top:22px; background:rgba(20,28,24,0.55); color:#f4efe3; border:1px solid rgba(244,239,227,0.4);">UNIT OPTIONS</button>
@@ -785,7 +786,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 142;
+const GAME_VERSION = 143;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -1390,6 +1391,38 @@ const BIOME_CONFIGS = {
     // than trying to force the normal random placement systems to
     // coincidentally produce a centered city and a straight vertical river.
     centerBuildingBlock: true
+  },
+  jungle: {
+    label: 'Jungle',
+    palette: {
+      groundBase: '#3a5c34', groundShadowLo: '#2e4a2a', groundShadowMid: '#284025',
+      scrubDark: '#1f3a1e', scrubLight: '#4d7042', dirtPath: '#5a4a32',
+      mountainRock: '#5f5646', mountainRockDark: '#463f33',
+      lakeWater: '#2f6b6a', lakeWaterDark: '#204d4d', lakeShoreline: '#4d7042', riverWater: '#3a7d7a'
+    },
+    // "Place mountains at the same frequency as with the Ice map" - copied
+    // directly from ice's own values below, including its wider
+    // mountainGapMultiplier (large units still need room to navigate
+    // between this many peaks).
+    mountainClusterCount: 9, mountainEdgeClusterCount: 5, mountainGapMultiplier: 1.8,
+    lakeInteriorCount: [2,3], lakeEdgeCount: [1,2],
+    // "very high density of trees" - scattered (not clumped) so coverage is
+    // continuous canopy rather than patches with visible gaps between them.
+    // Note the density formula below squares this multiplier (it feeds into
+    // a linear "scale" that then gets used as scale*scale), so 2.2 here
+    // means roughly 4-5x a normal biome's tree count, not 2.2x - genuinely
+    // dramatic without generating an unreasonable number of trees.
+    treeStyle: 'scattered', treeDensityMultiplier: 2.2,
+    // "It has no roads" - a falsy buildingStyle skips genRoadNetwork
+    // entirely (see the `if (biomeCfg.buildingStyle)` gate in genTerrain)
+    // AND skips every settlement-style building pass in genBuildings (see
+    // the `else if (biomeCfg.buildingStyle)` on the scattered fallback
+    // there) - both of which assume roads exist to place things beside.
+    // "some buildings placed together in the middle of the map" is handled
+    // entirely by centerBuildingBlock below instead, completely
+    // independent of buildingStyle/roads.
+    buildingStyle: false, buildingDensityMultiplier: 1,
+    centerBuildingBlock: true
   }
 };
 let currentBiome = 'desert';
@@ -1470,7 +1503,7 @@ const damageCtx = damageCanvas.getContext('2d');
 // these null and use the normal deterministic layout generators. Loading a
 // save supplies the recorded layouts so the visible map tiles are reproduced
 // exactly rather than merely regenerated from the current code.
-let savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null };
+let savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null, jungle: null };
 function tileLayoutValue(name, col, row) {
   const layout = savedTileLayouts[name];
   const N = name === 'grassland' ? GRASSLAND_ATLAS_GRID :
@@ -1648,7 +1681,13 @@ let groundTexturePattern = null;
 let fortressCityCenterZone = null;
 let fortressCityIndustrialPattern = null;
 function computeFortressCityCenterZone() {
-  if (currentBiome !== 'fortressCity') return null;
+  // Generalized beyond literally "Fortress City" so any biome flagged
+  // centerBuildingBlock gets the same center zone geometry - Jungle now
+  // uses this too ("some buildings placed together in the middle of the
+  // map"), just without Fortress City's own extra street-grid treatment
+  // (that's gated separately below on the actual biome, not just on this
+  // zone existing - see genTerrain's road-generation section).
+  if (!getBiomeConfig(currentBiome).centerBuildingBlock) return null;
   return { x: WORLD.w/2, y: WORLD.h/2, radius: Math.min(WORLD.w, WORLD.h) * 0.22 };
 }
 // ---------------------------------------------------------------------------
@@ -1865,6 +1904,110 @@ desertTileImages.forEach(img=>{
 if (desertTilesReady) buildDesertAtlas();
 
 // ---------------------------------------------------------------------------
+// Jungle tile system. Uses these ten supplied 300x300 dense-foliage ground
+// tiles, the same deterministic atlas-with-cross-fade-seams approach every
+// other real-photo biome (grassland/ice/desert/Urban Hell) already uses.
+// ---------------------------------------------------------------------------
+const JUNGLE_TILE_SIZE = 300;
+const JUNGLE_ATLAS_GRID = 6;
+const jungleTileSources = ["assets/terrain/jungle_tiles/tile_01.png", "assets/terrain/jungle_tiles/tile_02.png", "assets/terrain/jungle_tiles/tile_03.png", "assets/terrain/jungle_tiles/tile_04.png", "assets/terrain/jungle_tiles/tile_05.png", "assets/terrain/jungle_tiles/tile_06.png", "assets/terrain/jungle_tiles/tile_07.png", "assets/terrain/jungle_tiles/tile_08.png", "assets/terrain/jungle_tiles/tile_09.png", "assets/terrain/jungle_tiles/tile_10.png"];
+const jungleTileImages = jungleTileSources.map(src => {
+  const img = new Image();
+  img.decoding = 'async';
+  img.src = src;
+  return img;
+});
+let jungleTilesReady = jungleTileImages.every(img => img.complete && img.naturalWidth > 0);
+let jungleAtlasCanvas = null;
+
+function jungleTileIndex(col,row) {
+  const saved = tileLayoutValue('jungle', col, row);
+  if (saved !== null && saved < jungleTileImages.length) return saved;
+  let h = Math.imul(col + 47, 374761393) ^ Math.imul(row + 73, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  let idx = (h >>> 0) % jungleTileImages.length;
+  if (col > 0) {
+    const left = jungleTileIndex(col-1,row);
+    if (idx === left) idx = (idx + 1 + ((h>>>8)%9)) % jungleTileImages.length;
+  }
+  if (row > 0) {
+    const above = jungleTileIndex(col,row-1);
+    if (idx === above) idx = (idx + 1 + ((h>>>16)%9)) % jungleTileImages.length;
+  }
+  return idx;
+}
+
+function buildJungleAtlas() {
+  if (!jungleTilesReady) return;
+  const S=JUNGLE_TILE_SIZE, N=JUNGLE_ATLAS_GRID;
+  const atlas=document.createElement('canvas');
+  atlas.width=S*N; atlas.height=S*N;
+  const ac=atlas.getContext('2d');
+  ac.imageSmoothingEnabled=true;
+  for(let row=0;row<N;row++) for(let col=0;col<N;col++) {
+    ac.drawImage(jungleTileImages[jungleTileIndex(col,row)],col*S,row*S,S,S);
+  }
+
+  const seam=document.createElement('canvas');
+  seam.width=atlas.width; seam.height=atlas.height;
+  const sc=seam.getContext('2d');
+  sc.drawImage(atlas,0,0);
+  const B=12, half=B/2;
+
+  function vStrip(a,b) {
+    const strip=document.createElement('canvas'); strip.width=B; strip.height=S;
+    const c=strip.getContext('2d');
+    c.drawImage(a,S-B,0,B,S,0,0,B,S);
+    const r=document.createElement('canvas'); r.width=B; r.height=S;
+    const rc=r.getContext('2d');
+    rc.drawImage(b,0,0,B,S);
+    rc.globalCompositeOperation='destination-in';
+    const g=rc.createLinearGradient(0,0,B,0);
+    g.addColorStop(0,'rgba(255,255,255,0)'); g.addColorStop(1,'rgba(255,255,255,1)');
+    rc.fillStyle=g; rc.fillRect(0,0,B,S); c.drawImage(r,0,0); return strip;
+  }
+  function hStrip(a,b) {
+    const strip=document.createElement('canvas'); strip.width=S; strip.height=B;
+    const c=strip.getContext('2d');
+    c.drawImage(a,0,S-B,S,B,0,0,S,B);
+    const r=document.createElement('canvas'); r.width=S; r.height=B;
+    const rc=r.getContext('2d');
+    rc.drawImage(b,0,0,S,B);
+    rc.globalCompositeOperation='destination-in';
+    const g=rc.createLinearGradient(0,0,0,B);
+    g.addColorStop(0,'rgba(255,255,255,0)'); g.addColorStop(1,'rgba(255,255,255,1)');
+    rc.fillStyle=g; rc.fillRect(0,0,S,B); c.drawImage(r,0,0); return strip;
+  }
+  for(let row=0;row<N;row++) for(let boundary=1;boundary<N;boundary++) {
+    sc.drawImage(vStrip(jungleTileImages[jungleTileIndex(boundary-1,row)],jungleTileImages[jungleTileIndex(boundary,row)]),boundary*S-half,row*S);
+  }
+  for(let col=0;col<N;col++) for(let boundary=1;boundary<N;boundary++) {
+    sc.drawImage(hStrip(jungleTileImages[jungleTileIndex(col,boundary-1)],jungleTileImages[jungleTileIndex(col,boundary)]),col*S,boundary*S-half);
+  }
+  // Wrap edges so the whole atlas repeats continuously.
+  for(let row=0;row<N;row++) {
+    const strip=vStrip(jungleTileImages[jungleTileIndex(N-1,row)],jungleTileImages[jungleTileIndex(0,row)]);
+    sc.drawImage(strip,-half,row*S); sc.drawImage(strip,atlas.width-half,row*S);
+  }
+  for(let col=0;col<N;col++) {
+    const strip=hStrip(jungleTileImages[jungleTileIndex(col,N-1)],jungleTileImages[jungleTileIndex(col,0)]);
+    sc.drawImage(strip,col*S,-half); sc.drawImage(strip,col*S,atlas.height-half);
+  }
+  jungleAtlasCanvas=seam;
+  groundTexturePattern=ctx.createPattern(jungleAtlasCanvas,'repeat');
+}
+
+function markJungleTilesLoaded() {
+  jungleTilesReady=jungleTileImages.every(img=>img.complete && img.naturalWidth>0);
+  if(jungleTilesReady && currentBiome==='jungle') buildJungleAtlas();
+}
+jungleTileImages.forEach(img=>{
+  if(!img.complete || !img.naturalWidth) img.addEventListener('load',markJungleTilesLoaded,{once:true});
+});
+if (jungleTilesReady) buildJungleAtlas();
+
+// ---------------------------------------------------------------------------
 // Urban Hell industrial tile system v108.
 // Urban Hell uses ONLY these twelve supplied 300x300 industrial/asphalt/
 // concrete tiles for its ground. The old procedural Urban Hell background is
@@ -1969,6 +2112,11 @@ function regenerateGroundTexture() {
     // remaining biomes without a real tile set (none, currently) would
     // still fall through to.
     if (desertTilesReady) buildDesertAtlas();
+    else groundTexturePattern = null;
+    return;
+  }
+  if (currentBiome === 'jungle') {
+    if (jungleTilesReady) buildJungleAtlas();
     else groundTexturePattern = null;
     return;
   }
@@ -3727,6 +3875,17 @@ function genTrees(seedValue) {
     if (Math.hypot(x-blueBaseStart.x, y-blueBaseStart.y) < baseClearance) return false;
     if (Math.hypot(x-redBaseStart.x, y-redBaseStart.y) < baseClearance) return false;
     if (isPointOnRoad(x,y,TREE_COLLISION_RADIUS)) return false;
+    // Keep the centerBuildingBlock zone (Fortress City's downtown, Jungle's
+    // clearing) actually clear for buildings to go into. Fortress City gets
+    // this for free from its own real street grid there (trees already
+    // avoid roads), but a biome with centerBuildingBlock and NO roads at
+    // all (Jungle, at "very high" tree density on top of that) would
+    // otherwise fill the entire center with trees well before genBuildings
+    // ever gets a turn - genTrees always runs first - leaving the building
+    // cluster nowhere left to go and silently falling through to the
+    // "scatter a few anywhere" safety net instead, which is exactly the
+    // opposite of "buildings placed together in the middle of the map".
+    if (fortressCityCenterZone && Math.hypot(x-fortressCityCenterZone.x, y-fortressCityCenterZone.y) < fortressCityCenterZone.radius + 60) return false;
     trees.push({
       id: nextId(), kind: 'tree',
       x, y,
@@ -3866,6 +4025,19 @@ function genCompounds(seedValue) {
   // generation entirely for this biome rather than just filtering which
   // compound art it could use (the previous behavior, asphalt_-only pads).
   if (currentBiome === 'urban') return;
+  // Any biome with a falsy buildingStyle (currently just Jungle) has no
+  // roads and no scattered/village settlement placement at all - see the
+  // same check gating genRoadNetwork and genBuildings' settlement loops.
+  // Compounds are purely decorative pads for THAT scattered settlement
+  // system (and genBuildings separately attaches an actual building to
+  // most of them - see the compoundTargets loop there), so without any
+  // scattered buildings to sit under, generating compounds here would just
+  // scatter empty pads (or, worse, buildings-on-pads) all over the map,
+  // directly contradicting "no roads... buildings placed together in the
+  // middle of the map" - only the map's centerBuildingBlock cluster (a
+  // completely separate code path) should ever place anything for a biome
+  // like this.
+  if (!getBiomeConfig(currentBiome).buildingStyle) return;
   let seed = seedValue + 77031;
   function rnd(){
     seed = (seed*9301+49297)%233280;
@@ -4622,7 +4794,7 @@ function genBuildings(seedValue) {
         }
       }
     }
-  } else {
+  } else if (biomeCfg.buildingStyle) {
     // "scattered" (Desert/Ice) - the original settlement pattern: one main
     // building plus an occasional outbuilding or two, now anchored beside a
     // road the same way the denser styles are.
@@ -4678,14 +4850,26 @@ function genBuildings(seedValue) {
   // at least a handful, so this stays unconditional.
   const MIN_BUILDINGS = 4;
   let safetyTries = 0;
+  // A biome with no roads at all and only a centerBuildingBlock cluster
+  // (Jungle) shouldn't have this safety net scatter buildings randomly
+  // across the WHOLE map on bad luck - that directly contradicts "buildings
+  // placed together in the middle of the map". For that kind of biome, the
+  // fallback search stays confined to the same center zone the main
+  // cluster loop above already targets, just with a wider/more permissive
+  // search within it - still "a few buildings clumped in the middle" even
+  // in the unlucky case, never scattered anywhere else.
+  const centerOnly = !biomeCfg.buildingStyle && fortressCityCenterZone;
   while (buildings.length < MIN_BUILDINGS && safetyTries < 300) {
     safetyTries++;
     // Even the emergency placement pass remains road-oriented. A random
     // free-floating building looks especially artificial on the new tiled
     // maps, so use the same roadside candidate generator as normal villages.
-    const spot = roadGrid.length
-      ? pickRoadsideSpot(70 + rnd()*70)
-      : {x:200+rnd()*(WORLD.w-400), y:200+rnd()*(WORLD.h-400)};
+    const spot = centerOnly
+      ? { x: fortressCityCenterZone.x + (rnd()*2-1)*fortressCityCenterZone.radius,
+          y: fortressCityCenterZone.y + (rnd()*2-1)*fortressCityCenterZone.radius }
+      : (roadGrid.length
+        ? pickRoadsideSpot(70 + rnd()*70)
+        : {x:200+rnd()*(WORLD.w-400), y:200+rnd()*(WORLD.h-400)});
     if (isMountain(spot.x,spot.y)) continue;
     if (Math.hypot(spot.x-blueBaseStart.x,spot.y-blueBaseStart.y) < baseClearance) continue;
     if (Math.hypot(spot.x-redBaseStart.x,spot.y-redBaseStart.y) < baseClearance) continue;
@@ -5353,7 +5537,7 @@ placeExtraRandomSupplyDepots(3);
 function generateNewMap(sizeKey, biomeKey) {
   // A new game gets a newly generated visual tile layout. A loaded game sets
   // savedTileLayouts below and therefore reproduces its exact map instead.
-  savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null };
+  savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null, jungle: null };
   applyMapSize(sizeKey);
   applyBiome(biomeKey || 'desert');
 
@@ -10859,6 +11043,12 @@ function captureTileLayouts() {
       out.desert.push(desertTileIndex(col,row));
     }
   }
+  out.jungle = [];
+  for (let row=0; row<JUNGLE_ATLAS_GRID; row++) {
+    for (let col=0; col<JUNGLE_ATLAS_GRID; col++) {
+      out.jungle.push(jungleTileIndex(col,row));
+    }
+  }
   return out;
 }
 
@@ -11158,9 +11348,9 @@ function applyLoadedGame(data) {
   // Restore the exact tiled-ground layout before restoring the biome. The
   // biome's atlas builder consults these arrays, so the saved visual tile
   // arrangement is used immediately when the ground texture is rebuilt.
-  savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null };
+  savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null, jungle: null };
   if (data.tileLayouts && typeof data.tileLayouts === 'object') {
-    for (const key of ['grassland','ice','urban','desert']) {
+    for (const key of ['grassland','ice','urban','desert','jungle']) {
       const layout = data.tileLayouts[key];
       if (Array.isArray(layout)) savedTileLayouts[key] = layout.map(Number);
     }
