@@ -786,7 +786,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 143;
+const GAME_VERSION = 144;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -7212,40 +7212,40 @@ const RED_PURCHASE_WEIGHTS = {
   scout: 1, autotank: 1,
   siegemortar: 2, atinfantry: 2, sappers: 2
 };
-// Aggressive mode never garrisons or stations fire support, so Blockhouse,
-// Turret, and Mortar would just be wasted supply - weighted
-// down to a bare minimum instead, with everything that actually goes into a
-// raid (Infantry for capturing, Tank/Auto Tank/Scout/Mech/Assault Tank/LRM
-// Mech as the vanguard) pushed up accordingly. Mech is weighted highest of
-// the raid vanguard here: it's slow, so aggressive mode - which is all about
-// throwing waves at the enemy as fast as possible - benefits from having
-// plenty on hand well before a raid actually needs to move out. Assault Tank
-// is especially good at this since fixed defenses (deployed Turret/
-// Blockhouse, dug-in Artillery/Mortar) are exactly what a raid runs into
-// first. LRM Mech is expensive and its 8s reload is slow, so it's kept at a
-// moderate weight - a couple in a raid add valuable splash damage against
-// clustered defenders, but a whole raid of them would spend most of its time
-// reloading. Artillery is kept moderately weighted since red's fire support
-// still isn't raid-eligible, but it's cheap insurance around depots even
-// without an explicit stationing order (it'll auto-engage whatever wanders
-// near wherever it happens to end up). APC doesn't fit either priority
-// especially well in aggressive mode (its passenger-release ability is more
-// of a defensive/economy trick), so it stays at a low weight.
+// "When the AI Stance is set to aggressive... they will not build barricades
+// or foxholes or defensive structures like turrets, blockhouses or siege
+// mortars. They will build infantry and vehicles and aggressively attack the
+// blue team." Blockhouse and Siege Mortar are both permanently-deployed,
+// never-move-again structures (the update loop's home-defense/fortification
+// system that used to be their only real use for aggressive is now skipped
+// entirely for this strategy - see the `if (redStrategy !== 'aggressive')`
+// guards around it), so they're explicitly zeroed here, the same treatment
+// Medic already gets below, rather than just weighted low. Mortar is kept -
+// it's mobile fire support that moves and re-positions with the raid rather
+// than a permanent emplacement, which is the actual distinction the
+// instruction is drawing (structures that dig in forever vs. everything
+// else). Everything that actually goes into a raid (Infantry/AT Infantry/
+// Sappers for the infantry component, Tank/Auto Tank/Scout/Mech/Assault
+// Tank/LRM Mech/APC for the vehicle component) is weighted well above
+// anything else. Mech is weighted highest of the raid vanguard here: it's
+// slow, so aggressive mode - which is all about throwing waves at the enemy
+// as fast as possible - benefits from having plenty on hand well before a
+// raid actually needs to move out. Assault Tank is especially good at this
+// since fixed defenses on blue's side (deployed Turret/Blockhouse, dug-in
+// Artillery/Mortar) are exactly what a raid runs into first. LRM Mech is
+// expensive and its 8s reload is slow, so it's kept at a moderate weight - a
+// couple in a raid add valuable splash damage against clustered defenders,
+// but a whole raid of them would spend most of its time reloading.
 const RED_PURCHASE_WEIGHTS_AGGRESSIVE = {
   infantry: 5, tank: 5, mech: 4, assaulttank: 4, lrmmech: 2, autotank: 3, scout: 3,
-  artillery: 2,
-  blockhouse: 1, mortar: 1, apc: 1,
-  // Siege Mortar is weighted the same low priority as Blockhouse/Turret/
-  // Mortar here - it's a deploy-and-garrison structure, which aggressive
-  // mode has little use for mid-raid, but it still needs a nonzero weight
-  // so aggressive red builds a FEW for its now-unconditional home defense
-  // ring (see HOME_DEFENSE_TYPES) rather than never touching it at all.
+  artillery: 2, mortar: 2, apc: 2,
+  blockhouse: 0, siegemortar: 0,
   // AT Infantry and Sappers are both genuinely raid-capable infantry-class
   // units (AT Infantry's high per-shot damage is well suited to punching
   // through armor a raid runs into; Sappers' satchel charges are a real,
   // if short-ranged, threat), so both are weighted comparably to regular
   // Infantry rather than down at the support-structure tier.
-  siegemortar: 1, atinfantry: 3, sappers: 2
+  atinfantry: 3, sappers: 2
 };
 // Medic is explicitly zeroed here (not just omitted) in both tables above -
 // pickWeightedPurchaseTarget defaults any UNLISTED type to weight 1, which
@@ -7262,7 +7262,17 @@ function pickWeightedPurchaseTarget() {
   // disabled, so this never picks from an empty pool.
   const eligible = ALL_UNIT_TYPES.filter(type => unitEnabled.red[type]);
   (eligible.length ? eligible : ALL_UNIT_TYPES).forEach(type => {
-    const weight = weights[type] || 1;
+    // A real, previously-undetected bug: `weights[type] || 1` treats an
+    // EXPLICIT weight of 0 (Medic in both tables; Blockhouse/Siege Mortar in
+    // the aggressive table) exactly the same as "not listed at all", since
+    // 0 is falsy in JS - so `0 || 1` silently becomes 1 instead of actually
+    // excluding the type. This means Medic was never really excluded from
+    // red's purchase pool despite the comment above claiming so, and the
+    // same silent fallback would have undone "will not build... defensive
+    // structures like turrets, blockhouses or siege mortars" for aggressive
+    // too. Checking for undefined specifically (rather than falsiness)
+    // lets an explicit 0 actually mean zero.
+    const weight = weights[type] !== undefined ? weights[type] : 1;
     for (let i=0;i<weight;i++) pool.push(type);
   });
   return pool[Math.floor(Math.random()*pool.length)];
@@ -7429,7 +7439,7 @@ function updateAI(dt) {
       // weighted choice among everything currently affordable, so the spend-
       // down still favors the same composition as ordinary purchases would
       const pool = [];
-      affordable.forEach(type => { const w = weights[type] || 1; for (let i=0;i<w;i++) pool.push(type); });
+      affordable.forEach(type => { const w = weights[type] !== undefined ? weights[type] : 1; for (let i=0;i<w;i++) pool.push(type); });
       const choice = pool[Math.floor(Math.random()*pool.length)];
       purchaseUnit('red', choice);
       // A near-cap spend-down deliberately does NOT reroll redPurchaseTarget
@@ -7849,6 +7859,15 @@ function updateAI(dt) {
 
   // --- Home base garrison: station Turret/Artillery/Mortar around red's own
   // base, set to defend ---
+  // "When the AI Stance is set to aggressive, the red team will no longer
+  // cluster around its base. They will not build barricades or foxholes or
+  // defensive structures like turrets, blockhouses or siege mortars." - this
+  // entire fortification-construction system (this section) and the
+  // standing home-defense ring below it are both skipped entirely for
+  // aggressive - every Infantry/Sappers that would otherwise be pulled off
+  // to build and garrison stays in the free pool, available for raids and
+  // capture duty instead. Unchanged for defensive.
+  if (redStrategy !== 'aggressive') {
   // Since Foxhole and Barricade are never purchased directly (see
   // UNIT_COSTS, which deliberately omits both), they can only ever join the
   // home defense ring below if some Infantry/Sappers is actually commanded
@@ -7991,6 +8010,7 @@ function updateAI(dt) {
       }
     }
   });
+  } // end if (redStrategy !== 'aggressive') - fortification construction
 
   // Separate from the depot garrison/fire-support above, red also keeps a
   // standing ring of defenders directly around its own base. Each of the
@@ -8003,8 +8023,14 @@ function updateAI(dt) {
   // ONCE per match (see redHomeDefenseTargets, rolled in enterPlayMode) -
   // "it will not spawn any more than this" is an explicit hard ceiling per
   // type, so unlike the old defensive-mode behavior, this ring does NOT
-  // keep growing over the course of the match.
+  // keep growing over the course of the match. The declaration stays
+  // reachable for aggressive mode too (it's read further below in
+  // homeDefendersReady/the free-pool exclusion filter), but the actual
+  // ASSIGNMENT loop right after it is skipped entirely for aggressive -
+  // "will no longer cluster around its base" - so nothing ever actually
+  // becomes a home defender there in the first place.
   const HOME_DEFENSE_TYPES = ['turret', 'siegemortar', 'blockhouse', 'foxhole', 'barricade'];
+  if (redStrategy !== 'aggressive') {
   HOME_DEFENSE_TYPES.forEach(type => {
     const target = redHomeDefenseTargets[type];
     const current = redTanks.filter(t => t.unitType===type && t.homeDefenseAssignment).length;
@@ -8044,6 +8070,7 @@ function updateAI(dt) {
       }
     }
   });
+  } // end if (redStrategy !== 'aggressive') - home defense ring assignment/deployment
   // exclude home defenders (assigned, whether still traveling or arrived and
   // dug in) from the rest of this tick's rally/attack/defend logic
   free = free.filter(t => !HOME_DEFENSE_TYPES.includes(t.unitType) || !t.homeDefenseAssignment);
@@ -8104,8 +8131,16 @@ function updateAI(dt) {
     // Aggressive strategy is unaffected either way - it already ignores
     // posture and pushes constantly by design.
     const posturePressing = isAggressive || redPosture === 'attack';
-    const massedRaid = Math.random() < (isAggressive ? 0.35 : (redPosture === 'attack' ? 0.28 : 0.08));
-    const raidTarget = Math.max(5, massedRaid ? (20 + Math.floor(Math.random()*11)) : baseSize);
+    const massedRaid = Math.random() < (redPosture === 'attack' ? 0.28 : 0.08);
+    // "They will group their forces into groups of between 10 and 20 before
+    // attacking the blue team." - a hard, fixed range for aggressive,
+    // replacing the normal escalating-over-time/occasional-much-larger-wave
+    // formula entirely (that formula stays exactly as before for defensive -
+    // see the massedRaid roll just above, which no longer even considers
+    // aggressive mode).
+    const raidTarget = isAggressive
+      ? 10 + Math.floor(Math.random()*11)
+      : Math.max(5, massedRaid ? (20 + Math.floor(Math.random()*11)) : baseSize);
 
     const raidCandidates = rallied.filter(t => t.unitType==='tank' || t.unitType==='autotank' || t.unitType==='scout' || t.unitType==='mech' || t.unitType==='assaulttank' || t.unitType==='lrmmech');
     // Infantry is included too, but only once a raid is actually large enough
@@ -8114,10 +8149,10 @@ function updateAI(dt) {
     const infantryForRaid = raidTarget >= 8 ? rallied.filter(t=>INFANTRY_CLASS_TYPES.has(t.unitType)) : [];
     const raidPool = raidCandidates.concat(infantryForRaid);
 
-    // Aggressive mode launches with as few as half the target size already
-    // gathered rather than waiting for the full pool - it would rather throw
-    // an imperfectly-sized wave immediately than let units sit idle while a
-    // "proper" raid slowly accumulates. Defensive strategy now also presses
+    // "Group their forces... before attacking" - aggressive now waits for the
+    // FULL target (the whole 10-20 group) to actually be gathered before
+    // launching at all, rather than the old "half the target is enough,
+    // throw it now" behavior. Defensive strategy is unchanged: it presses
     // right at the full target size during an 'attack' posture window (the
     // wave actually goes out once posture flips), but holds out for 30% more
     // than the target while 'defend' posture is active, deliberately
@@ -8125,7 +8160,7 @@ function updateAI(dt) {
     // the stall-prevention/idle-backlog safety net further below still
     // overrides this if the buildup goes on too long or too many units pile
     // up unused, so this never risks units sitting idle forever.
-    const minPoolToLaunch = isAggressive ? Math.max(5, Math.ceil(raidTarget*0.5)) :
+    const minPoolToLaunch = isAggressive ? raidTarget :
       (posturePressing ? raidTarget : Math.ceil(raidTarget*1.3));
 
     // Stall prevention: aggressive mode is meant to keep constant pressure on
@@ -8200,8 +8235,14 @@ function updateAI(dt) {
       // commit the entire available pool rather than the normal
       // raidTarget-sized slice, so the backlog actually gets drained instead
       // of shrinking by only a few units while the rest keep piling up.
+      // Aggressive mode never takes the "whole pool" massedRaid branch below
+      // regardless of backlog/massedRaid, since "groups of between 10 and
+      // 20" is a hard range for it, not just a floor - only defensive mode's
+      // occasional big wave (and true backlog-draining, for either strategy)
+      // ever exceeds raidTarget's own cap.
       const drainingBacklog = stalled && genuinelyIdle.length >= IDLE_BACKLOG_THRESHOLD;
-      const raidForce = effectiveRaidPool.slice(0, drainingBacklog ? effectiveRaidPool.length : Math.min(effectiveRaidPool.length, massedRaid ? effectiveRaidPool.length : raidTarget));
+      const takeWholePool = !isAggressive && (drainingBacklog || massedRaid);
+      const raidForce = effectiveRaidPool.slice(0, takeWholePool ? effectiveRaidPool.length : Math.min(effectiveRaidPool.length, raidTarget));
       const target = pickRaidTarget();
       if (target) {
         raidForce.forEach((t, i)=>{
