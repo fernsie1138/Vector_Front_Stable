@@ -786,7 +786,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 147;
+const GAME_VERSION = 148;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -3037,15 +3037,35 @@ function aabbOverlapsRoad(x, y, hx, hy, pad) {
 // ---------------------------------------------------------------------------
 const RIVER_TILE_NATIVE_DIRS = { straight: ['N','S'], curve: ['N','E'] };
 
-const RIVER_SPAWN_CLEARANCE = 500; // comfortably covers the starting roster's whole formation footprint around either base, with margin to spare
+// Scales with map size (unlike BASE_SPAWN_CLEARANCE, the mountain
+// equivalent, which deliberately stays fixed - a mountain can always just
+// shrink to fit a tight spot via maxStampRadiusAt, but a river has no
+// equivalent "make it smaller" option: it needs a genuinely continuous path
+// across the whole map, which makes it far more sensitive to a fixed-size
+// clearance on a small board. Measured directly on a Small map (1300x1000):
+// with a flat 355 clearance, the two bases' zones together blocked an
+// ENTIRE row/column edge-to-edge, leaving no viable starting point in
+// either orientation no matter how many times generation retried - not a
+// narrow miss, a complete wall across the map's shortest dimension. Scaling
+// by the same sqrt(area ratio) factor other map-size-scaled clearances in
+// this file use brings Small back down to a clearance that leaves real room
+// on the sides, while Large keeps a proportionally generous berth instead
+// of a comparatively tiny one.
+function riverSpawnClearance() {
+  return 355 * Math.sqrt((WORLD.w*WORLD.h) / (BASE_WORLD_W*BASE_WORLD_H));
+}
 function riverCellBlockedByTerrain(col, row) {
-  // Same 7x7-lattice-over-the-tile technique roadCellBlockedByTerrain uses,
-  // and the same three grids (mountain/lake/crevasse) - "rivers will not
-  // intersect with mountains" is satisfied here at generation time (the
-  // walker simply never steps onto a blocked cell), the same way roads
-  // already avoid mountains/lakes. Deliberately does NOT check roadSolid/
-  // roadGrid - a river crossing a road is exactly the bridge case the
-  // rules ask for, not something to route around.
+  // Rivers are now generated FIRST, before any other terrain exists at all
+  // ("put the river down first... generate the rest of the map around it") -
+  // so unlike roadCellBlockedByTerrain, there is no mountain/lake/crevasse
+  // grid to check here at all; nothing has been placed yet for the river to
+  // avoid. The only thing that still needs checking is staying clear of
+  // both bases - "rivers are never placed near spawn points" - using the
+  // same radius the starting roster's own formation spacing assumes (see
+  // riverSpawnClearance). Everything generated AFTER the river (mountains,
+  // lakes, crevasses, roads, trees, buildings) is responsible for routing
+  // around IT instead, via isPointOnRiver/aabbOverlapsRiver - "make the map
+  // fit the river, not the other way around".
   //
   // Deliberately does NOT reject out-of-bounds coordinates the way
   // roadCellBlockedByTerrain does - the walk in genRiverNetwork needs to be
@@ -3054,39 +3074,18 @@ function riverCellBlockedByTerrain(col, row) {
   // those coordinates as "blocked" here would make that structurally
   // impossible: the walker could never satisfy its own "did I reach the
   // edge" check if every coordinate that would satisfy it was simultaneously
-  // treated as impassable terrain. The clamped array indexing below already
-  // handles this sensibly on its own - a query just past the border reads
-  // whatever solid/non-solid state the nearest real border cell has, a
-  // reasonable stand-in for "the area immediately outside the map". The
-  // walk loop's own bounds check (a couple of cells past the edge) is what
-  // actually keeps the walker from wandering arbitrarily far into that
-  // undefined space.
-  //
-  // Also treats both bases' clearance zones as blocked - "rivers are never
-  // placed near spawn points" - using the exact same radius the starting
-  // roster's own formation spacing assumes (see RIVER_SPAWN_CLEARANCE),
-  // so a river can never end up cutting through where units actually
-  // spawn in the first place.
-  const samples = [20, 60, 100, 140, 180, 220, 280];
+  // treated as impassable. The walk loop's own bounds check (a couple of
+  // cells past the edge) is what actually keeps the walker from wandering
+  // arbitrarily far past the border.
+  const samples = [20, 150, 280];
+  const clearance = riverSpawnClearance();
   for (const sy of samples) {
     for (const sx of samples) {
       const wx = col*ROAD_TILE_SIZE + sx;
       const wy = row*ROAD_TILE_SIZE + sy;
       if (
-        mountainSolid[
-          Math.max(0, Math.min(terrainRows-1, Math.round(wy/TERRAIN_CELL))) * terrainCols +
-          Math.max(0, Math.min(terrainCols-1, Math.round(wx/TERRAIN_CELL)))
-        ] === 1 ||
-        lakeSolid[
-          Math.max(0, Math.min(terrainRows-1, Math.round(wy/TERRAIN_CELL))) * terrainCols +
-          Math.max(0, Math.min(terrainCols-1, Math.round(wx/TERRAIN_CELL)))
-        ] === 1 ||
-        crevasseSolid[
-          Math.max(0, Math.min(terrainRows-1, Math.round(wy/TERRAIN_CELL))) * terrainCols +
-          Math.max(0, Math.min(terrainCols-1, Math.round(wx/TERRAIN_CELL)))
-        ] === 1 ||
-        Math.hypot(wx-blueBaseStart.x, wy-blueBaseStart.y) < RIVER_SPAWN_CLEARANCE ||
-        Math.hypot(wx-redBaseStart.x, wy-redBaseStart.y) < RIVER_SPAWN_CLEARANCE
+        Math.hypot(wx-blueBaseStart.x, wy-blueBaseStart.y) < clearance ||
+        Math.hypot(wx-redBaseStart.x, wy-redBaseStart.y) < clearance
       ) return true;
     }
   }
@@ -3108,9 +3107,16 @@ function genRiverNetwork(rnd) {
   const maxSteps = cellsW * cellsH * 2; // a full backtracking search can legitimately need to visit (and back out of) a large share of every cell in the grid before either finding an edge or proving none is reachable - this needs to be scaled to the grid's actual size, not just the direct edge-to-edge distance a plain walk would need
   const straightBias = 0.82; // turns less often than a road walker (0.94) - "twisting and turning" wants a visibly wavier line than a road's mostly-straight highways
 
-  // Chosen once for the whole map, not per attempt - a river is either a
-  // left-to-right feature or a top-to-bottom one, never a mix.
-  const horizontal = rnd() < 0.5;
+  // Runs the full generation attempt for ONE orientation (true=horizontal,
+  // false=vertical), returning its best result. Pulled into its own function
+  // (rather than genRiverNetwork just committing to whichever orientation it
+  // rolled) so a genuinely impossible orientation - confirmed to happen in
+  // practice on Small maps, where a base's clearance zone can trap every
+  // reachable starting column one row in, with no path out no matter how
+  // many times the walk retries from a fresh random point - can fall back to
+  // trying the OTHER orientation instead of the map simply going without a
+  // river that generation should have been able to produce.
+  function tryOrientation(horizontal) {
   const mainDir = horizontal ? 'E' : 'S';
   const backward = horizontal ? 'W' : 'N';
   const perpDirs = horizontal ? ['N','S'] : ['E','W'];
@@ -3138,33 +3144,38 @@ function genRiverNetwork(rnd) {
   // into a corner.
   function attemptWalk() {
     let col, row;
-    const perpStart = Math.max(0, Math.min(perpCells-1, Math.round(midPerp + (rnd()*2-1)*bandHalfWidth)));
-    if (horizontal) { col = 0; row = perpStart; } else { row = 0; col = perpStart; }
-
-    // If the chosen starting cell itself is blocked (a mountain, or too
-    // close to a base - see RIVER_SPAWN_CLEARANCE in
-    // riverCellBlockedByTerrain), slide along the near edge, staying inside
-    // the middle band as long as possible, looking for a clear starting
-    // point rather than giving up on this attempt immediately.
-    if (riverCellBlockedByTerrain(col, row)) {
-      let found = false;
-      const bandLo = Math.max(0, midPerp-bandHalfWidth), bandHi = Math.min(perpCells-1, midPerp+bandHalfWidth);
-      for (let p=bandLo; p<=bandHi && !found; p++) {
-        if (horizontal) { if (!riverCellBlockedByTerrain(0,p)) { row=p; found=true; } }
-        else { if (!riverCellBlockedByTerrain(p,0)) { col=p; found=true; } }
-      }
-      // Widen the search up to maxDrift (never further - "the middle or
-      // close to the middle" applies to the starting point too, not just
-      // the walk's later steps) before giving up on this attempt entirely.
-      if (!found) {
-        const driftLo = Math.max(0, midPerp-maxDrift), driftHi = Math.min(perpCells-1, midPerp+maxDrift);
-        for (let p=driftLo; p<=driftHi && !found; p++) {
-          if (horizontal) { if (!riverCellBlockedByTerrain(0,p)) { row=p; found=true; } }
-          else { if (!riverCellBlockedByTerrain(p,0)) { col=p; found=true; } }
-        }
-      }
-      if (!found) return { cells: new Set(), reachedEdge: false };
+    // Pick a starting point from ONE combined, shuffled pool spanning the
+    // full maxDrift range, with the middle band weighted 3x heavier so a
+    // near-center start is still the common case - but never the ONLY case
+    // tried across every retry. That distinction is the actual fix for a
+    // real, confirmed failure mode on Small maps: searching the narrow band
+    // first and ONLY falling back to the wider range when the entire band
+    // was blocked meant that whenever the band contained even ONE valid
+    // column, that column got chosen on literally every attempt, no matter
+    // how many retries ran - including cases where that one column was
+    // clear right at the edge but led nowhere (walled in solid one row
+    // further in), while a column further out in the wider range had a
+    // perfectly good path the search would never once reach. Pooling both
+    // ranges together and shuffling every attempt means an attempt that
+    // fails from one column genuinely tries a different one next time,
+    // rather than being funneled back to the same doomed start.
+    const bandLo = Math.max(0, midPerp-bandHalfWidth), bandHi = Math.min(perpCells-1, midPerp+bandHalfWidth);
+    const driftLo = Math.max(0, midPerp-maxDrift), driftHi = Math.min(perpCells-1, midPerp+maxDrift);
+    const pool = [];
+    for (let p=driftLo; p<=driftHi; p++) {
+      const weight = (p>=bandLo && p<=bandHi) ? 3 : 1;
+      for (let w=0; w<weight; w++) pool.push(p);
     }
+    for (let i=pool.length-1; i>0; i--) { const j=Math.floor(rnd()*(i+1)); [pool[i],pool[j]]=[pool[j],pool[i]]; }
+    let found = false;
+    const tried = new Set();
+    for (const p of pool) {
+      if (found || tried.has(p)) continue;
+      tried.add(p);
+      if (horizontal) { if (!riverCellBlockedByTerrain(0,p)) { col=0; row=p; found=true; } }
+      else { if (!riverCellBlockedByTerrain(p,0)) { col=p; row=0; found=true; } }
+    }
+    if (!found) return { cells: new Set(), reachedEdge: false };
 
     const path = [{col, row, dir: mainDir}]; // stack of visited cells in walk order, for backtracking
     const visited = new Set([roadCellKey(col,row)]); // permanent - once backtracked away from, a cell is never tried again this attempt, or backtracking could cycle forever too
@@ -3242,6 +3253,20 @@ function genRiverNetwork(rnd) {
       (result.reachedEdge === best.reachedEdge && result.cells.size > best.cells.size);
     if (better) best = result;
     if (best.reachedEdge && best.cells.size >= Math.min(cellsW, cellsH)) break; // long enough to genuinely cross the map's shorter dimension AND reaches an edge - good enough, stop early
+  }
+  return best;
+  }
+
+  // Chosen once for the whole map first - a river is either a left-to-right
+  // feature or a top-to-bottom one, never a mix - but if that orientation
+  // turns out to be topologically impossible given where the bases ended up
+  // (confirmed in practice on Small maps), the other orientation gets a full
+  // attempt of its own before conceding no river will fit at all this time.
+  const primaryHorizontal = rnd() < 0.5;
+  let best = tryOrientation(primaryHorizontal);
+  if (!best.reachedEdge) {
+    const fallback = tryOrientation(!primaryHorizontal);
+    if (fallback.reachedEdge || fallback.cells.size > best.cells.size) best = fallback;
   }
   riverGridCells = best.cells;
 }
@@ -3411,29 +3436,62 @@ function ensureRiverHasBridge() {
   const mid = (straightCells.length-1)/2;
   const ordered = straightCells.slice().sort((a,b) =>
     Math.abs(straightCells.indexOf(a)-mid) - Math.abs(straightCells.indexOf(b)-mid));
+  const isClear = (cells, crossingCell) =>
+    cells.every(c => !riverGridCells.has(roadCellKey(c.col,c.row)) || (c.col===crossingCell.col && c.row===crossingCell.row)) &&
+    cells.every(c => !mountainSolid[
+      Math.max(0, Math.min(terrainRows-1, Math.round((c.row*ROAD_TILE_SIZE+ROAD_TILE_SIZE/2)/TERRAIN_CELL))) * terrainCols +
+      Math.max(0, Math.min(terrainCols-1, Math.round((c.col*ROAD_TILE_SIZE+ROAD_TILE_SIZE/2)/TERRAIN_CELL)))
+    ]);
+  // Try a full 5-tile stub first (a real, visible approach road on both
+  // sides), then fall back to the minimum viable 3-tile stub (just enough
+  // for finalizeRoadGrid to resolve the crossing cell as a proper through
+  // tile at all - a single isolated cell with no road neighbors wouldn't
+  // resolve to anything) if mountains crowd every 5-tile candidate. "There
+  // will always be a bridge" is the harder requirement here than how long
+  // its approach reads visually - confirmed as a real, if uncommon, need on
+  // Ice specifically, where mountain density is high enough that every
+  // straight river cell can plausibly fail the wider check at once.
+  for (const stubHalfLength of [2, 1]) {
+    for (const cell of ordered) {
+      const riverVertical = rotateDirSetCW(RIVER_TILE_NATIVE_DIRS[cell.tile], cell.rotation).includes('N');
+      const offsets = [];
+      for (let d=-stubHalfLength; d<=stubHalfLength; d++) offsets.push(riverVertical ? [d,0] : [0,d]);
+      const cells = offsets.map(([dc,dr]) => ({ col: cell.col+dc, row: cell.row+dr }));
+      if (!isClear(cells, cell)) continue;
+      cells.forEach(c => roadGridCells.add(roadCellKey(c.col,c.row)));
+      finalizeRoadGrid();
+      bakeRiverSolidGrid();
+      return;
+    }
+  }
+  // Even the minimal 3-tile stub found nowhere clear on any straight cell -
+  // genuinely rare (confirmed to still happen occasionally on Ice, whose
+  // mountain density is the highest of any biome), but "there will always
+  // be a bridge" doesn't have an exception for it: force it through the
+  // single least-obstructed straight cell, clearing whatever mountain
+  // stands in the 3-tile stub's way rather than leaving the map without any
+  // crossing at all.
+  let best = null, bestBlockedCount = Infinity;
   for (const cell of ordered) {
     const riverVertical = rotateDirSetCW(RIVER_TILE_NATIVE_DIRS[cell.tile], cell.rotation).includes('N');
-    // The bridge road runs perpendicular to the river - horizontal (E/W)
-    // across a vertical river, vertical (N/S) across a horizontal one.
-    const stub = riverVertical
-      ? [[-2,0],[-1,0],[0,0],[1,0],[2,0]]
-      : [[0,-2],[0,-1],[0,0],[0,1],[0,2]];
-    const cells = stub.map(([dc,dr]) => ({ col: cell.col+dc, row: cell.row+dr }));
-    const clear = cells.every(c => !riverGridCells.has(roadCellKey(c.col,c.row)) || (c.col===cell.col && c.row===cell.row)) &&
-      cells.every(c => !mountainSolid[
-        Math.max(0, Math.min(terrainRows-1, Math.round((c.row*ROAD_TILE_SIZE+ROAD_TILE_SIZE/2)/TERRAIN_CELL))) * terrainCols +
-        Math.max(0, Math.min(terrainCols-1, Math.round((c.col*ROAD_TILE_SIZE+ROAD_TILE_SIZE/2)/TERRAIN_CELL)))
-      ]);
-    if (!clear) continue;
-    cells.forEach(c => roadGridCells.add(roadCellKey(c.col,c.row)));
-    finalizeRoadGrid();
-    bakeRiverSolidGrid();
-    return;
+    const offsets = riverVertical ? [[-1,0],[0,0],[1,0]] : [[0,-1],[0,0],[0,1]];
+    const cells = offsets.map(([dc,dr]) => ({ col: cell.col+dc, row: cell.row+dr }));
+    if (cells.some(c => riverGridCells.has(roadCellKey(c.col,c.row)) && !(c.col===cell.col && c.row===cell.row))) continue; // never clear through another river cell
+    const blockedCount = cells.filter(c => mountainSolid[
+      Math.max(0, Math.min(terrainRows-1, Math.round((c.row*ROAD_TILE_SIZE+ROAD_TILE_SIZE/2)/TERRAIN_CELL))) * terrainCols +
+      Math.max(0, Math.min(terrainCols-1, Math.round((c.col*ROAD_TILE_SIZE+ROAD_TILE_SIZE/2)/TERRAIN_CELL)))
+    ] === 1).length;
+    if (blockedCount < bestBlockedCount) { bestBlockedCount = blockedCount; best = { cell, cells }; }
   }
-  // No straight cell had clear ground on both sides for a stub - extremely
-  // rare (would need mountains crowding almost the entire river). Leaving
-  // the map without a forced bridge in this one edge case is preferable to
-  // placing a road through solid rock.
+  if (!best) return; // every straight cell has another river cell immediately alongside it - vanishingly unlikely, and there is genuinely no sensible place left to force a crossing
+  best.cells.forEach(c => {
+    const cx = c.col*ROAD_TILE_SIZE+ROAD_TILE_SIZE/2, cy = c.row*ROAD_TILE_SIZE+ROAD_TILE_SIZE/2;
+    mountains = mountains.filter(m => Math.hypot(m.x-cx, m.y-cy) > Math.max(m.rx,m.ry)+40);
+    roadGridCells.add(roadCellKey(c.col,c.row));
+  });
+  bakeMountainSolidGrid();
+  finalizeRoadGrid();
+  bakeRiverSolidGrid();
 }
 
 function bakeRiverSolidGrid() {
@@ -3695,6 +3753,29 @@ function genTerrain(seedValue){
   function rnd(){ seed = (seed*9301+49297)%233280; return seed/233280; }
   const biomeCfg = getBiomeConfig(currentBiome);
 
+  // "Put a river on 50% of all maps. When generating a map, put the river
+  // down first... then generate the rest of the map around it... make the
+  // map fit the river, not the other way around." Generated before anything
+  // else exists on the map (mountains, lakes, crevasses, roads, trees,
+  // buildings) - there's nothing yet to avoid except staying clear of both
+  // bases, which is exactly why genRiverNetwork itself can now be a plain,
+  // un-obstructed walk instead of needing the backtracking search an
+  // obstacle-laden version required: with a blank map, a river reaching its
+  // target edge should never genuinely fail. Everything generated after
+  // this point is what has to route around the river instead, using the
+  // same isPointOnRiver/aabbOverlapsRiver checks already used for roads.
+  // Skipped entirely for a biome with no roads at all (Jungle) - "there will
+  // always be a bridge" requires an actual road to exist to cross with, and
+  // a road-less biome can never provide one.
+  riverGridCells = new Set();
+  riverGrid = [];
+  riverSolid.fill(0);
+  if (biomeCfg.buildingStyle && rnd() < 0.5) {
+    genRiverNetwork(rnd);
+    finalizeRiverGrid();
+    bakeRiverSolidGrid();
+  }
+
   mountains = [];
 
   // "Do not place mountains that restrict or overlap where units spawn near
@@ -3749,6 +3830,10 @@ function genTerrain(seedValue){
       // to fit rather than getting rejected outright (see maxStampRadiusAt).
       const availableRadius = maxStampRadiusAt(px, py);
       if (availableRadius < 55) break; // no room here even for a small mountain - stop the range
+      // "Make the map fit the river, not the other way around" - a river
+      // now exists before mountains are ever placed, so a stamp landing on
+      // one ends this range right here rather than being placed over it.
+      if (isPointOnRiver(px, py, 55)) break;
       const maxLongSide = Math.min(460, availableRadius/0.46);
       const longSide = Math.min(maxLongSide, 200 + rnd()*260);
       const rotation = 0; // "do not rotate mountains, but you can scale them" - size still varies (above), orientation never does
@@ -3798,7 +3883,7 @@ function genTerrain(seedValue){
       cx = 500 + rnd()*(WORLD.w-1000);
       cy = 400 + rnd()*(WORLD.h-800);
       tries++;
-    } while (tries<20 && tooCloseToBase(cx, cy, 80));
+    } while (tries<20 && (tooCloseToBase(cx, cy, 80) || isPointOnRiver(cx, cy, 80)));
     // Roughly 1 in 4 ranges is just a single solo peak - "add some
     // mountains singularly" - the rest form a proper multi-stamp range.
     const count = rnd() < 0.25 ? 1 : (2 + Math.floor(rnd()*4)); // 1, or 2-5
@@ -3834,7 +3919,7 @@ function genTerrain(seedValue){
     // still keep clear of base start zones, same as interior ranges - an
     // edge mountain landing right on top of a player's spawn would be a
     // real problem, not just a cosmetic one
-    if (tooCloseToBase(cx, cy, 80)) continue;
+    if (tooCloseToBase(cx, cy, 80) || isPointOnRiver(cx, cy, 80)) continue;
 
     const count = 3 + Math.floor(rnd()*3); // 3-5 - edge ranges are always a proper multi-stamp range
     placeMountainRange(cx, cy, count, biomeCfg.mountainGapMultiplier);
@@ -3869,7 +3954,7 @@ function genTerrain(seedValue){
     // see maxStampRadiusAt there), a candidate point too close to a base for
     // this fixed size simply fails outright; the caller's own retry loop
     // (trying fresh random points) is what finds it a home instead.
-    if (tooCloseToBase(cx, cy, Math.max(rx,ry))) return null;
+    if (tooCloseToBase(cx, cy, Math.max(rx,ry)) || isPointOnRiver(cx, cy, Math.max(rx,ry))) return null;
     lakes.push({ id: ++lakeIdCounter, x: cx, y: cy, key, longSide: LAKE_LONG_SIDE, aspectRatio: type.aspectRatio, rotation, rx, ry });
     return { x: cx, y: cy };
   }
@@ -3891,7 +3976,7 @@ function genTerrain(seedValue){
     if (type.aspectRatio >= 1) { w = CREVASSE_LONG_SIDE; h = CREVASSE_LONG_SIDE/type.aspectRatio; }
     else { h = CREVASSE_LONG_SIDE; w = CREVASSE_LONG_SIDE*type.aspectRatio; }
     const rx = (w/2)*0.92, ry = (h/2)*0.92;
-    if (tooCloseToBase(cx, cy, Math.max(rx,ry))) return null;
+    if (tooCloseToBase(cx, cy, Math.max(rx,ry)) || isPointOnRiver(cx, cy, Math.max(rx,ry))) return null;
     crevasses.push({ id: ++crevasseIdCounter, x: cx, y: cy, key, longSide: CREVASSE_LONG_SIDE, aspectRatio: type.aspectRatio, rotation, rx, ry });
     return { x: cx, y: cy };
   }
@@ -3998,15 +4083,6 @@ function genTerrain(seedValue){
   // ---------------------------------------------------------------------------
   roadGridCells = new Set(); // world-grid "col,row" keys (see ROAD_TILE_SIZE) of every cell that has a road
   roadGrid = []; // finalized {col,row,tile,rotation} list, computed once generation is done - see finalizeRoadGrid below
-  // Reset unconditionally, same reasoning as roadGridCells/roadGrid above -
-  // genRiverNetwork only runs conditionally below (Jungle has no roads to
-  // ever bridge a river, and even biomes that do have roads only roll one
-  // river about half the time), so without this a map that DOESN'T get a
-  // river this time would otherwise keep rendering and blocking movement
-  // on whatever river the PREVIOUS map generation left behind.
-  riverGridCells = new Set();
-  riverGrid = [];
-  riverSolid.fill(0);
   fortressCityCenterZone = computeFortressCityCenterZone(); // reset unconditionally (null for every biome but Fortress City) regardless of whether the block below even runs
   if (biomeCfg.buildingStyle) {
     // Roads are snapped to the 300x300 tile grid, but a whole tile must also
@@ -4062,18 +4138,6 @@ function genTerrain(seedValue){
       }
     }
     finalizeRoadGrid();
-    // "Re-introduce rivers" - generated right after roads, in every biome
-    // that has roads at all (nested in this same `if (biomeCfg.buildingStyle)`
-    // block deliberately excludes Jungle, which has none - a river with no
-    // roads to ever bridge it would simply cut the map in half with no way
-    // across). Not guaranteed on every map even then - "rivers" are a
-    // roughly 50/50 feature, so plenty of matches still have none at all,
-    // same as how not every map rolls an edge-cropped lake either.
-    if (rnd() < 0.5) {
-      genRiverNetwork(rnd);
-      finalizeRiverGrid();
-      bakeRiverSolidGrid();
-    }
   }
 }
 genTerrain(terrainSeed);
@@ -6492,7 +6556,7 @@ function spawnStartingRoster(team, base, roster) {
       // "Units do not spawn on rivers" - structurally this should already
       // never happen (river generation excludes a much larger radius around
       // both bases than this formation ring ever reaches, see
-      // RIVER_SPAWN_CLEARANCE), but nudging outward on the same bearing
+      // riverSpawnClearance), but nudging outward on the same bearing
       // until clear costs nothing and makes the guarantee hold even if a
       // river's channel ever comes closer to a base than expected.
       let guard = 0;
