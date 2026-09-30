@@ -786,7 +786,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 148;
+const GAME_VERSION = 149;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -3036,6 +3036,25 @@ function aabbOverlapsRoad(x, y, hx, hy, pad) {
 // directly (see drawRivers), matching straight/curve geometry only.
 // ---------------------------------------------------------------------------
 const RIVER_TILE_NATIVE_DIRS = { straight: ['N','S'], curve: ['N','E'] };
+
+// River tile artwork - real painted images (banks, rocks, grass edge) rather
+// than the flat pixel-art blocks used before, loaded the same lazy-Image way
+// road tile images are: keyed by tile name ('straight'/'curve') matching
+// riverGrid's own tile field, skipped cleanly in drawRivers if not loaded
+// yet rather than ever drawing a broken placeholder. Both pieces of art are
+// drawn at their native rotation-0 orientation only (straight = N-S, curve
+// = N-E, matching RIVER_TILE_NATIVE_DIRS above exactly) - every other
+// direction is produced by drawRivers rotating the same two images in
+// 90-degree steps, never a separately drawn asset.
+const riverTileSources = { straight: 'assets/terrain/river_tiles/river_straight.png', curve: 'assets/terrain/river_tiles/river_curve.png' };
+const riverTileImages = {};
+const riverTileReady = {};
+Object.keys(riverTileSources).forEach(key => {
+  const img = new Image();
+  img.onload = () => { riverTileReady[key] = true; };
+  img.src = riverTileSources[key];
+  riverTileImages[key] = img;
+});
 
 // Scales with map size (unlike BASE_SPAWN_CLEARANCE, the mountain
 // equivalent, which deliberately stays fixed - a mountain can always just
@@ -13210,85 +13229,40 @@ function drawRoads() {
   });
 }
 
-// Pixel-art tile renderer for rivers - "change them to pixel artwork" -
-// replacing the earlier smooth-line/arc renderer with hard-edged square
-// blocks in a small deterministic palette (a classic retro water-tile
-// look: mostly the base water shade, with darker and lighter blocks mixed
-// in for texture), matching the halved channel width
-// (RIVER_CHANNEL_HALF_WIDTH) everywhere collision actually applies. Colors
-// are chosen from a hash of each pixel's own world position, not randomly
-// per frame, so the texture is completely stable rather than shimmering as
-// the camera moves or the game ticks.
-const RIVER_PIXEL_SIZE = 16; // world units per "pixel" block
-function riverPixelShadeIndex(px, py) {
-  let h = Math.imul(px + 374761393, 668265263) ^ Math.imul(py + 97, 2246822519);
-  h = Math.imul(h ^ (h >>> 15), 2654435761);
-  h ^= h >>> 13;
-  const r = (h >>> 0) % 100;
-  if (r < 62) return 0; // base water - the large majority of pixels
-  if (r < 85) return 1; // darker shade
-  return 2; // lighter shade
-}
+// Real-artwork tile renderer for rivers - replacing the earlier flat
+// pixel-art blocks with the actual painted river images (see
+// riverTileImages above), drawn exactly the same way drawRoads draws its
+// own tile images: a straight image and a curve image, each only ever
+// drawn at their native rotation-0 orientation and then rotated in
+// 90-degree steps by the canvas itself for every other direction, so a
+// single piece of art per tile shape covers every orientation the tile
+// grid ever needs.
 function drawRivers() {
   if (!riverGrid.length) return;
   const topLeft = screenToWorld(0,0);
   const botRight = screenToWorld(viewportWidth(), viewportHeight());
-  const margin = ROAD_TILE_SIZE;
-  const waterColor = PALETTE.riverWater || '#2f6b8a';
-  const colors = [
-    waterColor,
-    PALETTE.riverBank || shadeHexColor(waterColor, -22),
-    PALETTE.riverHighlight || shadeHexColor(waterColor, 26)
-  ];
-  const pixelPx = Math.max(1, RIVER_PIXEL_SIZE * camera.zoom);
-  const halfSizePx = (ROAD_TILE_SIZE/2) * camera.zoom;
-  const channelPx = RIVER_CHANNEL_HALF_WIDTH * camera.zoom;
-
+  const margin = ROAD_TILE_SIZE; // generous margin so a tile whose center is just off-screen but whose edge is still visible doesn't get culled early
   riverGrid.forEach(cell => {
     const wx = cell.col*ROAD_TILE_SIZE, wy = cell.row*ROAD_TILE_SIZE;
     if (wx+ROAD_TILE_SIZE < topLeft.x-margin || wx > botRight.x+margin) return;
     if (wy+ROAD_TILE_SIZE < topLeft.y-margin || wy > botRight.y+margin) return;
+    if (!riverTileReady[cell.tile]) return; // skip cleanly if this tile's image hasn't finished loading yet, rather than drawing nothing useful or throwing
+    const img = riverTileImages[cell.tile];
     const centerWorldX = wx + ROAD_TILE_SIZE/2, centerWorldY = wy + ROAD_TILE_SIZE/2;
     const s = worldToScreen(centerWorldX, centerWorldY);
+    const sizePx = ROAD_TILE_SIZE * camera.zoom;
+    // Same tiny sub-pixel overlap drawRoads uses, for the same reason: it
+    // closes anti-aliased hairline seams between adjacent tile images at
+    // fractional zoom levels without creating any visible widening.
+    const overlap = 0.75;
     ctx.save();
     ctx.translate(s.x, s.y);
-    ctx.rotate(cell.rotation * Math.PI/2); // rotation is stored as a 0-3 quarter-turn count, same convention as roadGrid; always an exact 90 degree multiple, so the pixel blocks drawn below stay perfectly axis-aligned on screen regardless
-
-    if (cell.tile === 'straight') {
-      // Native N-S: a straight vertical channel through the tile's middle.
-      // A simple grid of pixel blocks filling that channel rectangle.
-      for (let py = -halfSizePx; py < halfSizePx; py += pixelPx) {
-        for (let px = -channelPx; px < channelPx; px += pixelPx) {
-          const worldPx = Math.round((centerWorldX + px) / RIVER_PIXEL_SIZE);
-          const worldPy = Math.round((centerWorldY + py) / RIVER_PIXEL_SIZE);
-          ctx.fillStyle = colors[riverPixelShadeIndex(worldPx, worldPy)];
-          ctx.fillRect(px, py, pixelPx+0.5, pixelPx+0.5); // +0.5 closes hairline seams between adjacent blocks at fractional zoom levels
-        }
-      }
-    } else {
-      // Native N-E: sample points along the same quarter-circle bend the
-      // smooth version used (centered on the tile's top-right corner,
-      // sweeping from the top edge to the right edge), but instead of a
-      // continuous stroke, drop a pixel-block cluster at each sampled point
-      // and snap it to the pixel grid - a deliberately blocky, "staircase"
-      // curve rather than a smooth one, in keeping with pixel art.
-      const cx = halfSizePx, cy = -halfSizePx, r = halfSizePx;
-      const steps = Math.max(4, Math.round((r*Math.PI/2) / pixelPx));
-      for (let i=0; i<=steps; i++) {
-        const angle = Math.PI - (Math.PI/2) * (i/steps);
-        const ax = cx + Math.cos(angle)*r, ay = cy + Math.sin(angle)*r;
-        const snapX = Math.round(ax/pixelPx)*pixelPx, snapY = Math.round(ay/pixelPx)*pixelPx;
-        for (let oy = -channelPx; oy < channelPx; oy += pixelPx) {
-          for (let ox = -channelPx; ox < channelPx; ox += pixelPx) {
-            const bx = snapX+ox, by = snapY+oy;
-            const worldPx = Math.round((centerWorldX + bx) / RIVER_PIXEL_SIZE);
-            const worldPy = Math.round((centerWorldY + by) / RIVER_PIXEL_SIZE);
-            ctx.fillStyle = colors[riverPixelShadeIndex(worldPx, worldPy)];
-            ctx.fillRect(bx, by, pixelPx+0.5, pixelPx+0.5);
-          }
-        }
-      }
-    }
+    ctx.rotate(cell.rotation * Math.PI/2); // rotation is stored as a 0-3 quarter-turn count, same convention as roadGrid
+    ctx.drawImage(
+      img,
+      -sizePx/2-overlap, -sizePx/2-overlap,
+      sizePx+overlap*2, sizePx+overlap*2
+    );
     ctx.restore();
   });
 }
