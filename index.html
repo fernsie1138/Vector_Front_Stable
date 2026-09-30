@@ -581,6 +581,9 @@
       <button class="optionBtn" id="optBiomeFortressCity" data-group="biome" data-value="fortressCity">FORTRESS CITY</button>
       <button class="optionBtn" id="optBiomeJungle" data-group="biome" data-value="jungle">JUNGLE</button>
     </div>
+    <div class="optionRow">
+      <button class="optionBtn" id="optBiomeWasteland" data-group="biome" data-value="wasteland">WASTELAND</button>
+    </div>
   </div>
   <button class="launchBtn" id="btnUnitOptions" style="margin-top:22px; background:rgba(20,28,24,0.55); color:#f4efe3; border:1px solid rgba(244,239,227,0.4);">UNIT OPTIONS</button>
   <button class="launchBtn" id="btnOptionsConfirm">START GAME</button>
@@ -786,7 +789,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 150;
+const GAME_VERSION = 152;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -1423,6 +1426,36 @@ const BIOME_CONFIGS = {
     // independent of buildingStyle/roads.
     buildingStyle: false, buildingDensityMultiplier: 1,
     centerBuildingBlock: true
+  },
+  wasteland: {
+    label: 'Wasteland',
+    palette: {
+      groundBase: '#615a52', groundShadowLo: '#4a453e', groundShadowMid: '#39352f',
+      scrubDark: '#3d3a30', scrubLight: '#6b6559', dirtPath: '#514a3f',
+      mountainRock: '#57514a', mountainRockDark: '#3e3a34',
+      lakeWater: '#3d6b7a', lakeWaterDark: '#2a4d59', lakeShoreline: '#5c5648', riverWater: '#4a7d8c'
+    },
+    // "There are no roads, mountains, lakes or rivers on Wasteland" -
+    // mountains/lakes are zeroed directly (the same way Urban Hell already
+    // zeroes its own mountain count); roads and rivers are both gated by
+    // noRoads below instead, since buildingStyle itself needs to stay truthy
+    // here (see denseScatter) rather than falsy the way Jungle's "no roads"
+    // is expressed.
+    mountainClusterCount: 0, mountainEdgeClusterCount: 0, mountainGapMultiplier: 1,
+    lakeInteriorCount: [0,0], lakeEdgeCount: [0,0],
+    // Sparse, scattered weeds poking through rubble rather than anything
+    // resembling a forest - the supplied ground art already reads as barren,
+    // cratered devastation, not vegetation.
+    treeStyle: 'scattered', treeDensityMultiplier: 0.3,
+    // "no roads... many buildings, populate it heavily" - denseScatter (see
+    // its own dedicated branch in genBuildings) is a distinct building style
+    // from every other biome's: pure random-point scatter across the whole
+    // map with no road to anchor against at all, gated off from ever
+    // generating roads/rivers by noRoads specifically so a truthy
+    // buildingStyle here doesn't also imply "this biome has roads" the way
+    // it does everywhere else.
+    buildingStyle: 'denseScatter', buildingDensityMultiplier: 1.8,
+    noRoads: true
   }
 };
 let currentBiome = 'desert';
@@ -1503,7 +1536,7 @@ const damageCtx = damageCanvas.getContext('2d');
 // these null and use the normal deterministic layout generators. Loading a
 // save supplies the recorded layouts so the visible map tiles are reproduced
 // exactly rather than merely regenerated from the current code.
-let savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null, jungle: null };
+let savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null, jungle: null, wasteland: null };
 function tileLayoutValue(name, col, row) {
   const layout = savedTileLayouts[name];
   const N = name === 'grassland' ? GRASSLAND_ATLAS_GRID :
@@ -2008,6 +2041,111 @@ jungleTileImages.forEach(img=>{
 if (jungleTilesReady) buildJungleAtlas();
 
 // ---------------------------------------------------------------------------
+// Wasteland tile system. Uses these ten supplied 300x300 rubble/debris
+// ground tiles, the same deterministic atlas-with-cross-fade-seams approach
+// every other real-photo biome (grassland/ice/desert/Urban Hell/jungle)
+// already uses.
+// ---------------------------------------------------------------------------
+const WASTELAND_TILE_SIZE = 300;
+const WASTELAND_ATLAS_GRID = 6;
+const wastelandTileSources = ["assets/terrain/wasteland_tiles/tile_01.png", "assets/terrain/wasteland_tiles/tile_02.png", "assets/terrain/wasteland_tiles/tile_03.png", "assets/terrain/wasteland_tiles/tile_04.png", "assets/terrain/wasteland_tiles/tile_05.png", "assets/terrain/wasteland_tiles/tile_06.png", "assets/terrain/wasteland_tiles/tile_07.png", "assets/terrain/wasteland_tiles/tile_08.png", "assets/terrain/wasteland_tiles/tile_09.png", "assets/terrain/wasteland_tiles/tile_10.png"];
+const wastelandTileImages = wastelandTileSources.map(src => {
+  const img = new Image();
+  img.decoding = 'async';
+  img.src = src;
+  return img;
+});
+let wastelandTilesReady = wastelandTileImages.every(img => img.complete && img.naturalWidth > 0);
+let wastelandAtlasCanvas = null;
+
+function wastelandTileIndex(col,row) {
+  const saved = tileLayoutValue('wasteland', col, row);
+  if (saved !== null && saved < wastelandTileImages.length) return saved;
+  let h = Math.imul(col + 53, 374761393) ^ Math.imul(row + 79, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  let idx = (h >>> 0) % wastelandTileImages.length;
+  if (col > 0) {
+    const left = wastelandTileIndex(col-1,row);
+    if (idx === left) idx = (idx + 1 + ((h>>>8)%9)) % wastelandTileImages.length;
+  }
+  if (row > 0) {
+    const above = wastelandTileIndex(col,row-1);
+    if (idx === above) idx = (idx + 1 + ((h>>>16)%9)) % wastelandTileImages.length;
+  }
+  return idx;
+}
+
+function buildWastelandAtlas() {
+  if (!wastelandTilesReady) return;
+  const S=WASTELAND_TILE_SIZE, N=WASTELAND_ATLAS_GRID;
+  const atlas=document.createElement('canvas');
+  atlas.width=S*N; atlas.height=S*N;
+  const ac=atlas.getContext('2d');
+  ac.imageSmoothingEnabled=true;
+  for(let row=0;row<N;row++) for(let col=0;col<N;col++) {
+    ac.drawImage(wastelandTileImages[wastelandTileIndex(col,row)],col*S,row*S,S,S);
+  }
+
+  const seam=document.createElement('canvas');
+  seam.width=atlas.width; seam.height=atlas.height;
+  const sc=seam.getContext('2d');
+  sc.drawImage(atlas,0,0);
+  const B=12, half=B/2;
+
+  function vStrip(a,b) {
+    const strip=document.createElement('canvas'); strip.width=B; strip.height=S;
+    const c=strip.getContext('2d');
+    c.drawImage(a,S-B,0,B,S,0,0,B,S);
+    const r=document.createElement('canvas'); r.width=B; r.height=S;
+    const rc=r.getContext('2d');
+    rc.drawImage(b,0,0,B,S);
+    rc.globalCompositeOperation='destination-in';
+    const g=rc.createLinearGradient(0,0,B,0);
+    g.addColorStop(0,'rgba(255,255,255,0)'); g.addColorStop(1,'rgba(255,255,255,1)');
+    rc.fillStyle=g; rc.fillRect(0,0,B,S); c.drawImage(r,0,0); return strip;
+  }
+  function hStrip(a,b) {
+    const strip=document.createElement('canvas'); strip.width=S; strip.height=B;
+    const c=strip.getContext('2d');
+    c.drawImage(a,0,S-B,S,B,0,0,S,B);
+    const r=document.createElement('canvas'); r.width=S; r.height=B;
+    const rc=r.getContext('2d');
+    rc.drawImage(b,0,0,S,B);
+    rc.globalCompositeOperation='destination-in';
+    const g=rc.createLinearGradient(0,0,0,B);
+    g.addColorStop(0,'rgba(255,255,255,0)'); g.addColorStop(1,'rgba(255,255,255,1)');
+    rc.fillStyle=g; rc.fillRect(0,0,S,B); c.drawImage(r,0,0); return strip;
+  }
+  for(let row=0;row<N;row++) for(let boundary=1;boundary<N;boundary++) {
+    sc.drawImage(vStrip(wastelandTileImages[wastelandTileIndex(boundary-1,row)],wastelandTileImages[wastelandTileIndex(boundary,row)]),boundary*S-half,row*S);
+  }
+  for(let col=0;col<N;col++) for(let boundary=1;boundary<N;boundary++) {
+    sc.drawImage(hStrip(wastelandTileImages[wastelandTileIndex(col,boundary-1)],wastelandTileImages[wastelandTileIndex(col,boundary)]),col*S,boundary*S-half);
+  }
+  // Wrap edges so the whole atlas repeats continuously.
+  for(let row=0;row<N;row++) {
+    const strip=vStrip(wastelandTileImages[wastelandTileIndex(N-1,row)],wastelandTileImages[wastelandTileIndex(0,row)]);
+    sc.drawImage(strip,-half,row*S); sc.drawImage(strip,atlas.width-half,row*S);
+  }
+  for(let col=0;col<N;col++) {
+    const strip=hStrip(wastelandTileImages[wastelandTileIndex(col,N-1)],wastelandTileImages[wastelandTileIndex(col,0)]);
+    sc.drawImage(strip,col*S,-half); sc.drawImage(strip,col*S,atlas.height-half);
+  }
+  wastelandAtlasCanvas=seam;
+  groundTexturePattern=ctx.createPattern(wastelandAtlasCanvas,'repeat');
+}
+
+function markWastelandTilesLoaded() {
+  wastelandTilesReady=wastelandTileImages.every(img=>img.complete && img.naturalWidth>0);
+  if(wastelandTilesReady && currentBiome==='wasteland') buildWastelandAtlas();
+}
+wastelandTileImages.forEach(img=>{
+  if(!img.complete || !img.naturalWidth) img.addEventListener('load',markWastelandTilesLoaded,{once:true});
+});
+if (wastelandTilesReady) buildWastelandAtlas();
+
+// ---------------------------------------------------------------------------
 // Urban Hell industrial tile system v108.
 // Urban Hell uses ONLY these twelve supplied 300x300 industrial/asphalt/
 // concrete tiles for its ground. The old procedural Urban Hell background is
@@ -2117,6 +2255,11 @@ function regenerateGroundTexture() {
   }
   if (currentBiome === 'jungle') {
     if (jungleTilesReady) buildJungleAtlas();
+    else groundTexturePattern = null;
+    return;
+  }
+  if (currentBiome === 'wasteland') {
+    if (wastelandTilesReady) buildWastelandAtlas();
     else groundTexturePattern = null;
     return;
   }
@@ -3046,7 +3189,15 @@ const RIVER_TILE_NATIVE_DIRS = { straight: ['N','S'], curve: ['N','E'] };
 // = N-E, matching RIVER_TILE_NATIVE_DIRS above exactly) - every other
 // direction is produced by drawRivers rotating the same two images in
 // 90-degree steps, never a separately drawn asset.
-const riverTileSources = { straight: 'assets/terrain/river_tiles/river_straight.png', curve: 'assets/terrain/river_tiles/river_curve.png' };
+// _v2 filenames are deliberate, not decorative - the underlying artwork was
+// replaced in place once already (opaque placeholder -> real art) and then
+// edited again in place (white background removed), both times keeping the
+// exact same file names, which is exactly the situation a browser's own
+// image cache doesn't reliably invalidate on. Giving the file a new name
+// whenever its content changes is what actually guarantees every player
+// gets the current artwork rather than whatever this same URL happened to
+// resolve to on a previous visit.
+const riverTileSources = { straight: 'assets/terrain/river_tiles/river_straight_v2.png', curve: 'assets/terrain/river_tiles/river_curve_v2.png' };
 const riverTileImages = {};
 const riverTileReady = {};
 Object.keys(riverTileSources).forEach(key => {
@@ -3789,7 +3940,7 @@ function genTerrain(seedValue){
   riverGridCells = new Set();
   riverGrid = [];
   riverSolid.fill(0);
-  if (biomeCfg.buildingStyle && rnd() < 0.5) {
+  if (biomeCfg.buildingStyle && !biomeCfg.noRoads && rnd() < 0.5) {
     genRiverNetwork(rnd);
     finalizeRiverGrid();
     bakeRiverSolidGrid();
@@ -4103,7 +4254,15 @@ function genTerrain(seedValue){
   roadGridCells = new Set(); // world-grid "col,row" keys (see ROAD_TILE_SIZE) of every cell that has a road
   roadGrid = []; // finalized {col,row,tile,rotation} list, computed once generation is done - see finalizeRoadGrid below
   fortressCityCenterZone = computeFortressCityCenterZone(); // reset unconditionally (null for every biome but Fortress City) regardless of whether the block below even runs
-  if (biomeCfg.buildingStyle) {
+  // noRoads is a separate flag from buildingStyle on purpose: Jungle has no
+  // roads AND no ordinary settlement-style building placement (a falsy
+  // buildingStyle already skips both), but Wasteland needs the opposite mix
+  // - "no roads... many buildings" - so it has a real, truthy buildingStyle
+  // (see the 'denseScatter' branch in genBuildings) specifically so its
+  // buildings don't fall through to the fallback scattered/roadside style,
+  // while noRoads independently keeps this block (and the river generation
+  // above, which checks the same flag) from ever running for it.
+  if (biomeCfg.buildingStyle && !biomeCfg.noRoads) {
     // Roads are snapped to the 300x300 tile grid, but a whole tile must also
     // be clear of mountains/lakes. Test a 7x7 lattice over each candidate
     // cell rather than only testing its centre; this prevents the edge of a
@@ -4985,7 +5144,12 @@ function genBuildings(seedValue) {
     // than at an odd angle.
     // Industrial Hell uses its own dedicated 12-building set instead of the
     // normal 10 - see INDUSTRIAL_BUILDING_TYPES/drawBuilding.
-    const buildingPool = currentBiome === 'urban' ? INDUSTRIAL_BUILDING_TYPES : BUILDING_TYPES;
+    // Wasteland explicitly wants BOTH sets together - "use all buildings
+    // including standard buildings and those from Industrial Hell" - rather
+    // than either/or the way every other biome picks exactly one pool.
+    const buildingPool = currentBiome === 'urban' ? INDUSTRIAL_BUILDING_TYPES :
+      currentBiome === 'wasteland' ? BUILDING_TYPES.concat(INDUSTRIAL_BUILDING_TYPES) :
+      BUILDING_TYPES;
     const buildingType = placementOptions?.buildingType || buildingPool[Math.floor(rnd()*buildingPool.length)];
     const sizeScale = Number.isFinite(placementOptions?.sizeScale) ? placementOptions.sizeScale : (0.75 + rnd()*0.75);
     const rotation = Number.isFinite(placementOptions?.rotation) ? placementOptions.rotation : (Math.floor(rnd()*4) * (Math.PI/2));
@@ -5112,11 +5276,22 @@ function genBuildings(seedValue) {
                        b.x,b.y,existingExt.hx,existingExt.hy,6)) return false;
     }
 
+    // "No buildings are to spawn undamaged. All buildings must be in a
+    // state of 'Slightly Damaged' or 'Heavily Damaged'." getBuildingDamageState
+    // derives its state purely from hp/maxHp at render time (0.75 and 0.35
+    // are the 'normal'/'slight'/'extensive' thresholds - see
+    // BUILDING_SLIGHT_THRESHOLD/BUILDING_EXTENSIVE_THRESHOLD), so starting a
+    // Wasteland building below 0.75 of its maxHp, rather than at full health
+    // like every other biome, is what actually keeps it out of the
+    // 'normal'/undamaged state from the moment it's placed - maxHp itself is
+    // untouched, so a Wasteland building is exactly as tough to actually
+    // finish off as the same building anywhere else, just already scarred.
+    const startHpFraction = currentBiome === 'wasteland' ? (0.05 + rnd()*0.69) : 1;
     buildings.push({
       id: nextId(), kind: 'building',
       x, y,
       buildingType: buildingType.key, sizeScale, footprint,
-      hp: BUILDING_MAX_HP, maxHp: BUILDING_MAX_HP, alive: true,
+      hp: BUILDING_MAX_HP*startHpFraction, maxHp: BUILDING_MAX_HP, alive: true,
       rotation, // only the 4 cardinal directions - "rotated north, south, east and west" - matching drawBuilding's own sprite rotation, which only ever draws at these same 90-degree increments
       destroyed: false,
       hasFlame: false, flameDuration: 0, flameBorn: 0, nextFlameSmokeAt: 0,
@@ -5349,6 +5524,37 @@ function genBuildings(seedValue) {
         for (let e=0;e<extra;e++) {
           const along = (rnd()*2-1)*118;
           tryPlaceBuilding(spot.x+alongX*along, spot.y+alongY*along);
+        }
+      }
+    }
+  } else if (biomeCfg.buildingStyle === 'denseScatter') {
+    // Wasteland: "no roads... many buildings, populate it heavily" - every
+    // other style above anchors its placement against a road (pickRoadsideSpot),
+    // which doesn't exist here at all (see the noRoads flag). Instead this
+    // scatters cluster centers at pure random points across the whole map -
+    // the same technique mountains/lakes already use to place themselves
+    // without any road network to reference - checked only against the same
+    // hard constraints those use (map bounds, base clearance); tryPlaceBuilding's
+    // own building-vs-building collision check handles the rest. A high base
+    // count with a large, near-guaranteed cluster of extra buildings around
+    // each successful site is what actually produces "heavily populated"
+    // coverage rather than a thin scatter of isolated structures.
+    const settlementCount = Math.max(30, Math.round(70 * scale*scale * densityMul));
+    for (let i=0;i<settlementCount;i++) {
+      let spot, tries=0;
+      do {
+        spot = { x: 200+rnd()*(WORLD.w-400), y: 200+rnd()*(WORLD.h-400) };
+        tries++;
+      } while (tries<20 && (Math.hypot(spot.x-blueBaseStart.x,spot.y-blueBaseStart.y)<baseClearance || Math.hypot(spot.x-redBaseStart.x,spot.y-redBaseStart.y)<baseClearance));
+      if (tries>=20) continue;
+      tryPlaceBuilding(spot.x, spot.y);
+      if (rnd() < 0.88) {
+        const clusterAngle = rnd()*Math.PI*2;
+        const extra = 3 + Math.floor(rnd()*4); // 3-6 extra buildings per cluster
+        for (let e=0;e<extra;e++) {
+          const ang = clusterAngle + (rnd()*2-1)*1.3;
+          const dist = 60 + rnd()*150;
+          tryPlaceBuilding(spot.x+Math.cos(ang)*dist, spot.y+Math.sin(ang)*dist);
         }
       }
     }
@@ -6096,7 +6302,7 @@ placeExtraRandomSupplyDepots(3);
 function generateNewMap(sizeKey, biomeKey) {
   // A new game gets a newly generated visual tile layout. A loaded game sets
   // savedTileLayouts below and therefore reproduces its exact map instead.
-  savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null, jungle: null };
+  savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null, jungle: null, wasteland: null };
   applyMapSize(sizeKey);
   applyBiome(biomeKey || 'desert');
 
@@ -9904,6 +10110,17 @@ function resolveHit(p) {
 let lingeringSmoke = []; // smoke puffs that persist for a few seconds after an explosion, independent of the explosion's own short shockwave/debris lifetime
 
 function spawnExplosion(x, y, radius, treeDamage) {
+  // "Don't put craters in rivers. Let the rounds land but don't put a
+  // crater icon." A round can still land and detonate on a river tile
+  // perfectly normally - the shockwave/debris/smoke effects and any tree or
+  // unit damage below all still happen exactly as they would anywhere else
+  // - only the PERMANENT scorch mark and the persistent crater data record
+  // are skipped, since a crater sitting on top of flowing water makes sense
+  // neither visually nor as "cover" (the Detection Range/stealth-dwell
+  // system that reads the data record below is about hiding in solid
+  // ground, not treating a river as concealment).
+  const onRiver = isPointOnRiver(x, y, 0);
+  if (!onRiver) {
   // Permanent battle damage: paint a scorch/crater mark onto the persistent
   // damage layer at this exact spot, once, right when the explosion happens.
   // This is independent of the explosion's own short-lived shockwave/debris/
@@ -9947,6 +10164,7 @@ function spawnExplosion(x, y, radius, treeDamage) {
   } else {
     craters.push({ x, y, radius: newRadius });
   }
+  } // end if (!onRiver) - scorch mark + crater data record
 
   // Trees are only destructible by explosive weapon fire (this function is
   // only ever called for an actual explosion - a splash-weapon impact or a
@@ -11688,6 +11906,12 @@ function captureTileLayouts() {
       out.jungle.push(jungleTileIndex(col,row));
     }
   }
+  out.wasteland = [];
+  for (let row=0; row<WASTELAND_ATLAS_GRID; row++) {
+    for (let col=0; col<WASTELAND_ATLAS_GRID; col++) {
+      out.wasteland.push(wastelandTileIndex(col,row));
+    }
+  }
   return out;
 }
 
@@ -11989,9 +12213,9 @@ function applyLoadedGame(data) {
   // Restore the exact tiled-ground layout before restoring the biome. The
   // biome's atlas builder consults these arrays, so the saved visual tile
   // arrangement is used immediately when the ground texture is rebuilt.
-  savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null, jungle: null };
+  savedTileLayouts = { grassland: null, ice: null, urban: null, desert: null, jungle: null, wasteland: null };
   if (data.tileLayouts && typeof data.tileLayouts === 'object') {
-    for (const key of ['grassland','ice','urban','desert','jungle']) {
+    for (const key of ['grassland','ice','urban','desert','jungle','wasteland']) {
       const layout = data.tileLayouts[key];
       if (Array.isArray(layout)) savedTileLayouts[key] = layout.map(Number);
     }
