@@ -786,7 +786,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 146;
+const GAME_VERSION = 147;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -3037,6 +3037,7 @@ function aabbOverlapsRoad(x, y, hx, hy, pad) {
 // ---------------------------------------------------------------------------
 const RIVER_TILE_NATIVE_DIRS = { straight: ['N','S'], curve: ['N','E'] };
 
+const RIVER_SPAWN_CLEARANCE = 500; // comfortably covers the starting roster's whole formation footprint around either base, with margin to spare
 function riverCellBlockedByTerrain(col, row) {
   // Same 7x7-lattice-over-the-tile technique roadCellBlockedByTerrain uses,
   // and the same three grids (mountain/lake/crevasse) - "rivers will not
@@ -3060,6 +3061,12 @@ function riverCellBlockedByTerrain(col, row) {
   // walk loop's own bounds check (a couple of cells past the edge) is what
   // actually keeps the walker from wandering arbitrarily far into that
   // undefined space.
+  //
+  // Also treats both bases' clearance zones as blocked - "rivers are never
+  // placed near spawn points" - using the exact same radius the starting
+  // roster's own formation spacing assumes (see RIVER_SPAWN_CLEARANCE),
+  // so a river can never end up cutting through where units actually
+  // spawn in the first place.
   const samples = [20, 60, 100, 140, 180, 220, 280];
   for (const sy of samples) {
     for (const sx of samples) {
@@ -3077,92 +3084,134 @@ function riverCellBlockedByTerrain(col, row) {
         crevasseSolid[
           Math.max(0, Math.min(terrainRows-1, Math.round(wy/TERRAIN_CELL))) * terrainCols +
           Math.max(0, Math.min(terrainCols-1, Math.round(wx/TERRAIN_CELL)))
-        ] === 1
+        ] === 1 ||
+        Math.hypot(wx-blueBaseStart.x, wy-blueBaseStart.y) < RIVER_SPAWN_CLEARANCE ||
+        Math.hypot(wx-redBaseStart.x, wy-redBaseStart.y) < RIVER_SPAWN_CLEARANCE
       ) return true;
     }
   }
   return false;
 }
 
-// Walks a single river from a random point on a random map edge to wherever
-// it happens to exit the map (any edge, not necessarily the opposite one) -
-// "stretch across the map from edge to edge, twisting and turning as they
-// go". No branching at all (unlike genRoadNetwork's walk, which spins off
-// side branches) - a river is always exactly one continuous line, which is
-// also exactly why finalizeRiverGrid below never needs a tjunction/cross
-// tile: no cell a non-branching walk visits can ever end up with more than
-// two river neighbors.
+// Walks a single river across the map, always oriented left-to-right or
+// top-to-bottom (never diagonal-ish edge-to-edge like the very first version
+// of this was) and always running through the middle or close to it -
+// "rivers always run through the middle or close to the middle of the map
+// either left to right or top to bottom". No branching at all (unlike
+// genRoadNetwork's walk, which spins off side branches) - a river is always
+// exactly one continuous line, which is also exactly why finalizeRiverGrid
+// below never needs a tjunction/cross tile: no cell a non-branching walk
+// visits can ever end up with more than two river neighbors.
 function genRiverNetwork(rnd) {
   const cellsW = Math.ceil(WORLD.w / ROAD_TILE_SIZE);
   const cellsH = Math.ceil(WORLD.h / ROAD_TILE_SIZE);
-  const dirKeys = ['N','S','E','W'];
   const maxSteps = cellsW * cellsH * 2; // a full backtracking search can legitimately need to visit (and back out of) a large share of every cell in the grid before either finding an edge or proving none is reachable - this needs to be scaled to the grid's actual size, not just the direct edge-to-edge distance a plain walk would need
   const straightBias = 0.82; // turns less often than a road walker (0.94) - "twisting and turning" wants a visibly wavier line than a road's mostly-straight highways
 
-  // A single attempt from one random edge point, returning the path it
-  // actually settled on. This is a randomized depth-first walk WITH
-  // backtracking - the same core technique maze-generation algorithms use -
-  // rather than a plain walk that simply gives up the instant it can't go
-  // any further forward. That distinction matters a great deal here:
-  // mountains cover a meaningful fraction of most maps, and earlier versions
-  // of this that couldn't backtrack had two confirmed failure modes - giving
-  // up within the first 1-3 cells when a straight line ran into a mountain
-  // immediately, and (once obstacle-avoidance was added to fix that) getting
-  // stuck circling the same short loop of cells indefinitely once it started
-  // revisiting them, burning through the whole step budget without making
-  // any real progress. Backtracking - stepping back to the previous cell and
-  // trying a different direction from there, rather than abandoning the
-  // whole attempt - is what actually guarantees finding a way through
-  // whenever one topologically exists, the same way it guarantees a maze
-  // generator never paints itself into a corner.
-  function attemptWalk() {
-    const edge = Math.floor(rnd()*4); // 0=top,1=bottom,2=left,3=right
-    let col, row, dir;
-    if (edge === 0) { col = Math.floor(rnd()*cellsW); row = 0; dir = 'S'; }
-    else if (edge === 1) { col = Math.floor(rnd()*cellsW); row = cellsH-1; dir = 'N'; }
-    else if (edge === 2) { col = 0; row = Math.floor(rnd()*cellsH); dir = 'E'; }
-    else { col = cellsW-1; row = Math.floor(rnd()*cellsH); dir = 'W'; }
+  // Chosen once for the whole map, not per attempt - a river is either a
+  // left-to-right feature or a top-to-bottom one, never a mix.
+  const horizontal = rnd() < 0.5;
+  const mainDir = horizontal ? 'E' : 'S';
+  const backward = horizontal ? 'W' : 'N';
+  const perpDirs = horizontal ? ['N','S'] : ['E','W'];
+  const perpCells = horizontal ? cellsH : cellsW; // the dimension being kept near its middle
+  const midPerp = (perpCells-1)/2;
+  const bandHalfWidth = Math.max(1, Math.round(perpCells * 0.16)); // "the middle or close to the middle" - roughly the central third of that dimension
+  const maxDrift = Math.max(bandHalfWidth+1, Math.round(perpCells * 0.28)); // hard ceiling on how far a walk is ever allowed to stray perpendicular to its main direction - wider than bandHalfWidth (so wobbling within "close to the middle" doesn't feel artificially stiff), but well short of reaching a side edge
 
-    // If the chosen edge cell itself is blocked (a mountain sitting right on
-    // the border), slide along that same edge looking for a clear starting
+  // A single attempt starting from a random point within the middle band on
+  // the near edge, returning the path it actually settled on. This is a
+  // randomized depth-first walk WITH backtracking - the same core technique
+  // maze-generation algorithms use - rather than a plain walk that simply
+  // gives up the instant it can't go any further forward. That distinction
+  // matters a great deal here: mountains cover a meaningful fraction of most
+  // maps, and earlier versions of this that couldn't backtrack had two
+  // confirmed failure modes - giving up within the first 1-3 cells when a
+  // straight line ran into a mountain immediately, and (once obstacle-
+  // avoidance was added to fix that) getting stuck circling the same short
+  // loop of cells indefinitely once it started revisiting them, burning
+  // through the whole step budget without making any real progress.
+  // Backtracking - stepping back to the previous cell and trying a different
+  // direction from there, rather than abandoning the whole attempt - is what
+  // actually guarantees finding a way through whenever one topologically
+  // exists, the same way it guarantees a maze generator never paints itself
+  // into a corner.
+  function attemptWalk() {
+    let col, row;
+    const perpStart = Math.max(0, Math.min(perpCells-1, Math.round(midPerp + (rnd()*2-1)*bandHalfWidth)));
+    if (horizontal) { col = 0; row = perpStart; } else { row = 0; col = perpStart; }
+
+    // If the chosen starting cell itself is blocked (a mountain, or too
+    // close to a base - see RIVER_SPAWN_CLEARANCE in
+    // riverCellBlockedByTerrain), slide along the near edge, staying inside
+    // the middle band as long as possible, looking for a clear starting
     // point rather than giving up on this attempt immediately.
     if (riverCellBlockedByTerrain(col, row)) {
       let found = false;
-      if (edge === 0 || edge === 1) {
-        for (let c=0;c<cellsW;c++) { if (!riverCellBlockedByTerrain(c,row)) { col=c; found=true; break; } }
-      } else {
-        for (let r=0;r<cellsH;r++) { if (!riverCellBlockedByTerrain(col,r)) { row=r; found=true; break; } }
+      const bandLo = Math.max(0, midPerp-bandHalfWidth), bandHi = Math.min(perpCells-1, midPerp+bandHalfWidth);
+      for (let p=bandLo; p<=bandHi && !found; p++) {
+        if (horizontal) { if (!riverCellBlockedByTerrain(0,p)) { row=p; found=true; } }
+        else { if (!riverCellBlockedByTerrain(p,0)) { col=p; found=true; } }
+      }
+      // Widen the search up to maxDrift (never further - "the middle or
+      // close to the middle" applies to the starting point too, not just
+      // the walk's later steps) before giving up on this attempt entirely.
+      if (!found) {
+        const driftLo = Math.max(0, midPerp-maxDrift), driftHi = Math.min(perpCells-1, midPerp+maxDrift);
+        for (let p=driftLo; p<=driftHi && !found; p++) {
+          if (horizontal) { if (!riverCellBlockedByTerrain(0,p)) { row=p; found=true; } }
+          else { if (!riverCellBlockedByTerrain(p,0)) { col=p; found=true; } }
+        }
       }
       if (!found) return { cells: new Set(), reachedEdge: false };
     }
 
-    const path = [{col, row, dir}]; // stack of visited cells in walk order, for backtracking
+    const path = [{col, row, dir: mainDir}]; // stack of visited cells in walk order, for backtracking
     const visited = new Set([roadCellKey(col,row)]); // permanent - once backtracked away from, a cell is never tried again this attempt, or backtracking could cycle forever too
     let reachedEdge = false;
 
     for (let step=0; step<maxSteps && path.length>0; step++) {
       const top = path[path.length-1];
-      col = top.col; row = top.row; dir = top.dir;
-      if (col < -2 || col > cellsW+1 || row < -2 || row > cellsH+1) { reachedEdge = true; break; }
+      col = top.col; row = top.row;
+      const exited = horizontal ? (col > cellsW+1) : (row > cellsH+1);
+      if (exited) { reachedEdge = true; break; }
 
-      // Build a direction preference order: normally strongly prefer
-      // continuing straight (the actual "twisting and turning" wobble is
-      // this occasionally NOT happening), but always fall back through
-      // every other direction before admitting defeat - never a U-turn
-      // back the way this cell was entered, since that's just re-treading
-      // the same step backwards rather than a genuine new direction.
-      const opposite = {N:'S',S:'N',E:'W',W:'E'}[dir];
-      let preferred = dir;
+      // Direction preference: strongly favor continuing straight along the
+      // main direction (the "twisting and turning" wobble is this
+      // occasionally NOT happening), and when it does wobble, weight
+      // whichever perpendicular direction pulls back toward the middle band
+      // more heavily the further this cell has already drifted from it -
+      // "always run through the middle or close to the middle" as an
+      // ongoing constraint on the whole path, not just its start and end
+      // points. Backward (directly away from the target edge) is never
+      // attempted at all, guaranteeing steady progress across the map
+      // instead of the walk being able to wander back and forth forever.
+      let preferred = mainDir;
       if (rnd() > straightBias) {
-        const turnChoices = dirKeys.filter(d => d !== opposite && d !== dir);
-        preferred = turnChoices[Math.floor(rnd()*turnChoices.length)];
+        const perpCoord = horizontal ? row : col;
+        const drift = (perpCoord - midPerp) / (bandHalfWidth || 1); // roughly -1..1 inside the band, beyond it past +/-1
+        const towardCenterDir = drift > 0 ? perpDirs[0] : perpDirs[1]; // perpDirs[0] is N (or E), which decreases row (or col)
+        const correctionChance = Math.max(0.5, Math.min(0.92, 0.5 + drift*0.35));
+        preferred = rnd() < correctionChance ? towardCenterDir : perpDirs.find(d => d !== towardCenterDir);
       }
-      const tryOrder = [preferred, ...dirKeys.filter(d => d !== opposite && d !== preferred)];
+      const tryOrder = [preferred, mainDir, ...perpDirs.filter(d => d !== preferred)].filter((d,i,arr) => arr.indexOf(d)===i);
 
       let advanced = false;
       for (const d of tryOrder) {
         const nc = col+ROAD_DIRS[d].dc, nr = row+ROAD_DIRS[d].dr;
         const key = roadCellKey(nc,nr);
+        // Hard cap on perpendicular drift - the preference weighting above
+        // makes drifting far from the middle band unlikely, but with enough
+        // backtracking attempts a walk can still occasionally wander badly
+        // off to one side while continuing to make progress in the main
+        // direction (a river nominally "top to bottom" that drifts far
+        // enough sideways to end up hugging a side edge instead is exactly
+        // NOT "through the middle or close to the middle", regardless of how
+        // it got there). A direction that would push the perpendicular
+        // coordinate outside this range is treated as unavailable, the same
+        // as terrain or an already-visited cell - never a soft preference.
+        const nextPerp = horizontal ? nr : nc;
+        if (Math.abs(nextPerp - midPerp) > maxDrift) continue;
         if (riverCellBlockedByTerrain(nc,nr) || visited.has(key)) continue;
         visited.add(key);
         path.push({col:nc, row:nr, dir:d});
@@ -3176,18 +3225,18 @@ function genRiverNetwork(rnd) {
   }
 
   // Try a handful of attempts and keep the best one. "Best" means: prefer
-  // any attempt that genuinely reached a map edge over one that got boxed in
-  // by mountains mid-map, even if the boxed-in one happened to cover more
-  // cells first - a river that gives up because mountains surround it on
-  // every side is exactly the "ends abruptly" problem this is meant to
-  // solve, and a shorter-but-complete attempt is a better result than a
-  // longer-but-incomplete one. With backtracking in place this essentially
-  // always succeeds on the first or second try; the retry loop mainly
-  // exists for genuine edge cases (an edge cell whose only viable route
-  // curls back to the SAME edge almost immediately) and as a final safety
-  // net.
+  // any attempt that genuinely reached the target edge over one that got
+  // boxed in by mountains mid-map, even if the boxed-in one happened to
+  // cover more cells first - a river that gives up because mountains
+  // surround it on every side is exactly the "ends abruptly" problem this
+  // is meant to solve, and a shorter-but-complete attempt is a better result
+  // than a longer-but-incomplete one. With backtracking in place this
+  // essentially always succeeds on the first or second try; the retry loop
+  // mainly exists for genuine edge cases (a starting point whose only viable
+  // route curls back to the same edge almost immediately) and as a final
+  // safety net.
   let best = { cells: new Set(), reachedEdge: false };
-  for (let attempt=0; attempt<8; attempt++) {
+  for (let attempt=0; attempt<15; attempt++) {
     const result = attemptWalk();
     const better = result.reachedEdge && !best.reachedEdge ? true :
       (result.reachedEdge === best.reachedEdge && result.cells.size > best.cells.size);
@@ -3240,7 +3289,7 @@ function finalizeRiverGrid() {
 // (buildings/compounds). Used for keeping trees/buildings/lakes off rivers
 // at generation time, and (with pad 0) as part of removeRoadOverlaps'
 // cleanup sweep and bakeRiverSolidGrid's movement-blocking bake.
-const RIVER_CHANNEL_HALF_WIDTH = ROAD_TILE_SIZE * 0.22;
+const RIVER_CHANNEL_HALF_WIDTH = ROAD_TILE_SIZE * 0.11; // half the previous 0.22 - "make rivers half the thickness that they currently are"
 function isPointOnRiver(x, y, pad) {
   if (!riverGrid.length) return false;
   const halfLength = ROAD_TILE_SIZE/2;
@@ -3323,6 +3372,68 @@ function enforcePerpendicularRiverCrossings() {
     }
   });
   if (removedAny) finalizeRoadGrid(); // re-resolve every tile/rotation now that some cells have been removed - a neighbor of a removed cell may need to change from, say, a cross to a tjunction
+}
+
+// Returns true if riverGrid already has at least one valid perpendicular
+// road crossing - the same validity test enforcePerpendicularRiverCrossings
+// applies when deciding what to remove, used here just to check rather than
+// to clean up.
+function riverHasValidBridge() {
+  if (!riverGrid.length) return true; // no river at all - "at least one bridge" is vacuously satisfied, nothing to cross
+  return riverGrid.some(cell => {
+    const key = roadCellKey(cell.col, cell.row);
+    if (!roadGridCells.has(key)) return false;
+    if (cell.tile !== 'straight') return false;
+    const roadEntry = roadGrid.find(r => r.col===cell.col && r.row===cell.row);
+    if (!roadEntry || roadEntry.tile !== 'straight') return false;
+    const riverVertical = rotateDirSetCW(RIVER_TILE_NATIVE_DIRS[cell.tile], cell.rotation).includes('N');
+    const roadVertical = rotateDirSetCW(ROAD_TILE_NATIVE_DIRS[roadEntry.tile], roadEntry.rotation).includes('N');
+    return riverVertical !== roadVertical;
+  });
+}
+
+// "There must always be at least one road (bridge) crossing a river for each
+// map." Independently-generated roads and rivers, even with generation
+// biased to cross sensibly, can still occasionally end up with no crossing
+// at all (or none left once enforcePerpendicularRiverCrossings removes every
+// invalid one it found) - rather than accept that as a rare but real
+// possibility, this forces one in wherever needed: picks a straight river
+// tile with genuinely clear ground on both sides, lays a short 5-tile road
+// stub directly across it, and re-resolves both grids afterward. Placed
+// roughly in the middle of the river's own path (not right at either end,
+// where it's more likely to be crowded by whatever the river's own
+// obstacle-avoidance was routing around).
+function ensureRiverHasBridge() {
+  if (!riverGrid.length || riverHasValidBridge()) return;
+  const straightCells = riverGrid.filter(c => c.tile === 'straight');
+  if (!straightCells.length) return; // an all-curves river is vanishingly rare, and there's no sensible single cell to force a crossing at
+  // Prefer cells nearer the middle of the river's own path over its ends.
+  const mid = (straightCells.length-1)/2;
+  const ordered = straightCells.slice().sort((a,b) =>
+    Math.abs(straightCells.indexOf(a)-mid) - Math.abs(straightCells.indexOf(b)-mid));
+  for (const cell of ordered) {
+    const riverVertical = rotateDirSetCW(RIVER_TILE_NATIVE_DIRS[cell.tile], cell.rotation).includes('N');
+    // The bridge road runs perpendicular to the river - horizontal (E/W)
+    // across a vertical river, vertical (N/S) across a horizontal one.
+    const stub = riverVertical
+      ? [[-2,0],[-1,0],[0,0],[1,0],[2,0]]
+      : [[0,-2],[0,-1],[0,0],[0,1],[0,2]];
+    const cells = stub.map(([dc,dr]) => ({ col: cell.col+dc, row: cell.row+dr }));
+    const clear = cells.every(c => !riverGridCells.has(roadCellKey(c.col,c.row)) || (c.col===cell.col && c.row===cell.row)) &&
+      cells.every(c => !mountainSolid[
+        Math.max(0, Math.min(terrainRows-1, Math.round((c.row*ROAD_TILE_SIZE+ROAD_TILE_SIZE/2)/TERRAIN_CELL))) * terrainCols +
+        Math.max(0, Math.min(terrainCols-1, Math.round((c.col*ROAD_TILE_SIZE+ROAD_TILE_SIZE/2)/TERRAIN_CELL)))
+      ]);
+    if (!clear) continue;
+    cells.forEach(c => roadGridCells.add(roadCellKey(c.col,c.row)));
+    finalizeRoadGrid();
+    bakeRiverSolidGrid();
+    return;
+  }
+  // No straight cell had clear ground on both sides for a stub - extremely
+  // rare (would need mountains crowding almost the entire river). Leaving
+  // the map without a forced bridge in this one edge case is preferable to
+  // placing a road through solid rock.
 }
 
 function bakeRiverSolidGrid() {
@@ -5920,6 +6031,11 @@ function generateNewMap(sizeKey, biomeKey) {
   // remove would otherwise get wastefully culled for a road that, in
   // retrospect, was never actually going to be there.
   enforcePerpendicularRiverCrossings();
+  // "There must always be at least one road (Bridge) crossing a river for
+  // each map." - checked and, if needed, forced right after the
+  // perpendicular-crossing cleanup above (which can occasionally remove the
+  // map's only crossing if it wasn't a clean one).
+  ensureRiverHasBridge();
   removeRoadOverlaps();
   // riverSolid was baked once, inside genTerrain, right after the MAIN road
   // network was finalized - but genBuildings (just above) can still add
@@ -6370,9 +6486,22 @@ function spawnStartingRoster(team, base, roster) {
   roster.forEach(entry => {
     for (let i=0; i<entry.count; i++) {
       const ang = (placed / totalUnits) * Math.PI*2;
-      const dist = 110;
-      const x = base.x + Math.cos(ang)*dist;
-      const y = base.y + Math.sin(ang)*dist;
+      let dist = 110;
+      let x = base.x + Math.cos(ang)*dist;
+      let y = base.y + Math.sin(ang)*dist;
+      // "Units do not spawn on rivers" - structurally this should already
+      // never happen (river generation excludes a much larger radius around
+      // both bases than this formation ring ever reaches, see
+      // RIVER_SPAWN_CLEARANCE), but nudging outward on the same bearing
+      // until clear costs nothing and makes the guarantee hold even if a
+      // river's channel ever comes closer to a base than expected.
+      let guard = 0;
+      while (isPointOnRiver(x, y, 20) && guard < 20) {
+        dist += 20;
+        x = base.x + Math.cos(ang)*dist;
+        y = base.y + Math.sin(ang)*dist;
+        guard++;
+      }
       // Starting units - including Turret/Blockhouse - spawn undeployed and
       // not defending, same as anything else placed by DEFEND normally would
       // start out. A unit spawned already permanentlyDeployed can never be
@@ -6394,10 +6523,8 @@ const BLUE_STARTING_ROSTER = [
   { unitType: 'mortar', count: 2 }
 ];
 const RED_STARTING_ROSTER = [
-  { unitType: 'tank', count: 10 },
   { unitType: 'infantry', count: 10 },
-  { unitType: 'artillery', count: 4 },
-  { unitType: 'mortar', count: 4 }
+  { unitType: 'mortar', count: 5 }
 ];
 
 // Sets up a normal match: blue and red each start with a fixed defensive-
@@ -13019,74 +13146,84 @@ function drawRoads() {
   });
 }
 
-// Simple flat-color tile renderer for rivers - "for the first implementation
-// just create simple blue artwork for the rivers" - no photographic tiles,
-// just filled strokes along each tile's actual channel geometry (the exact
-// same channel width/position bakeRiverSolidGrid uses for collision, so the
-// visible water always matches where it actually blocks movement). Straight
-// tiles are a simple line down the middle; curve tiles are a quarter-circle
-// arc connecting the two open edges, giving the bend a smooth, natural
-// sweep rather than a sharp right-angle turn. Reuses the same
-// bank/water/highlight three-layer look the old waypoint-based river
-// renderer had, just applied per-tile instead of along one continuous
-// smoothed path.
+// Pixel-art tile renderer for rivers - "change them to pixel artwork" -
+// replacing the earlier smooth-line/arc renderer with hard-edged square
+// blocks in a small deterministic palette (a classic retro water-tile
+// look: mostly the base water shade, with darker and lighter blocks mixed
+// in for texture), matching the halved channel width
+// (RIVER_CHANNEL_HALF_WIDTH) everywhere collision actually applies. Colors
+// are chosen from a hash of each pixel's own world position, not randomly
+// per frame, so the texture is completely stable rather than shimmering as
+// the camera moves or the game ticks.
+const RIVER_PIXEL_SIZE = 16; // world units per "pixel" block
+function riverPixelShadeIndex(px, py) {
+  let h = Math.imul(px + 374761393, 668265263) ^ Math.imul(py + 97, 2246822519);
+  h = Math.imul(h ^ (h >>> 15), 2654435761);
+  h ^= h >>> 13;
+  const r = (h >>> 0) % 100;
+  if (r < 62) return 0; // base water - the large majority of pixels
+  if (r < 85) return 1; // darker shade
+  return 2; // lighter shade
+}
 function drawRivers() {
   if (!riverGrid.length) return;
   const topLeft = screenToWorld(0,0);
   const botRight = screenToWorld(viewportWidth(), viewportHeight());
   const margin = ROAD_TILE_SIZE;
   const waterColor = PALETTE.riverWater || '#2f6b8a';
-  const bankColor = PALETTE.riverBank || shadeHexColor(waterColor, -18);
-  const highlightColor = PALETTE.riverHighlight || shadeHexColor(waterColor, 30);
-  const channelWidthPx = RIVER_CHANNEL_HALF_WIDTH * 2 * camera.zoom;
+  const colors = [
+    waterColor,
+    PALETTE.riverBank || shadeHexColor(waterColor, -22),
+    PALETTE.riverHighlight || shadeHexColor(waterColor, 26)
+  ];
+  const pixelPx = Math.max(1, RIVER_PIXEL_SIZE * camera.zoom);
+  const halfSizePx = (ROAD_TILE_SIZE/2) * camera.zoom;
+  const channelPx = RIVER_CHANNEL_HALF_WIDTH * camera.zoom;
+
   riverGrid.forEach(cell => {
     const wx = cell.col*ROAD_TILE_SIZE, wy = cell.row*ROAD_TILE_SIZE;
     if (wx+ROAD_TILE_SIZE < topLeft.x-margin || wx > botRight.x+margin) return;
     if (wy+ROAD_TILE_SIZE < topLeft.y-margin || wy > botRight.y+margin) return;
     const centerWorldX = wx + ROAD_TILE_SIZE/2, centerWorldY = wy + ROAD_TILE_SIZE/2;
     const s = worldToScreen(centerWorldX, centerWorldY);
-    const halfSizePx = (ROAD_TILE_SIZE/2) * camera.zoom;
     ctx.save();
     ctx.translate(s.x, s.y);
-    ctx.rotate(cell.rotation * Math.PI/2); // rotation is stored as a 0-3 quarter-turn count, same convention as roadGrid
-    ctx.lineCap = 'butt';
-    const layers = [
-      { color: bankColor, width: channelWidthPx*1.22, alpha: 1 },
-      { color: waterColor, width: channelWidthPx, alpha: 1 },
-      { color: highlightColor, width: Math.max(1, channelWidthPx*0.28), alpha: 0.35 }
-    ];
+    ctx.rotate(cell.rotation * Math.PI/2); // rotation is stored as a 0-3 quarter-turn count, same convention as roadGrid; always an exact 90 degree multiple, so the pixel blocks drawn below stay perfectly axis-aligned on screen regardless
+
     if (cell.tile === 'straight') {
-      // Native N-S: a straight vertical channel through the tile's middle,
-      // extended half a pixel past each edge so adjacent tiles butt up with
-      // no visible seam.
-      layers.forEach((layer, i) => {
-        ctx.save();
-        ctx.globalAlpha = layer.alpha;
-        ctx.strokeStyle = layer.color;
-        ctx.lineWidth = layer.width;
-        ctx.beginPath();
-        const xOff = i===2 ? -channelWidthPx*0.15 : 0; // highlight offset to one side, suggesting current/reflection rather than a flat fill
-        ctx.moveTo(xOff, -halfSizePx-1);
-        ctx.lineTo(xOff, halfSizePx+1);
-        ctx.stroke();
-        ctx.restore();
-      });
+      // Native N-S: a straight vertical channel through the tile's middle.
+      // A simple grid of pixel blocks filling that channel rectangle.
+      for (let py = -halfSizePx; py < halfSizePx; py += pixelPx) {
+        for (let px = -channelPx; px < channelPx; px += pixelPx) {
+          const worldPx = Math.round((centerWorldX + px) / RIVER_PIXEL_SIZE);
+          const worldPy = Math.round((centerWorldY + py) / RIVER_PIXEL_SIZE);
+          ctx.fillStyle = colors[riverPixelShadeIndex(worldPx, worldPy)];
+          ctx.fillRect(px, py, pixelPx+0.5, pixelPx+0.5); // +0.5 closes hairline seams between adjacent blocks at fractional zoom levels
+        }
+      }
     } else {
-      // Native N-E: a quarter-circle bend, centered on the tile's top-right
-      // corner, sweeping from the top edge (N) around to the right edge (E)
-      // - a smooth curve rather than a sharp right-angle turn.
-      const cx = halfSizePx, cy = -halfSizePx;
-      layers.forEach((layer, i) => {
-        ctx.save();
-        ctx.globalAlpha = layer.alpha;
-        ctx.strokeStyle = layer.color;
-        ctx.lineWidth = layer.width;
-        const r = i===2 ? halfSizePx*0.88 : halfSizePx; // highlight arc pulled slightly inward, same "offset toward one side" idea as the straight case
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, Math.PI, Math.PI/2, true);
-        ctx.stroke();
-        ctx.restore();
-      });
+      // Native N-E: sample points along the same quarter-circle bend the
+      // smooth version used (centered on the tile's top-right corner,
+      // sweeping from the top edge to the right edge), but instead of a
+      // continuous stroke, drop a pixel-block cluster at each sampled point
+      // and snap it to the pixel grid - a deliberately blocky, "staircase"
+      // curve rather than a smooth one, in keeping with pixel art.
+      const cx = halfSizePx, cy = -halfSizePx, r = halfSizePx;
+      const steps = Math.max(4, Math.round((r*Math.PI/2) / pixelPx));
+      for (let i=0; i<=steps; i++) {
+        const angle = Math.PI - (Math.PI/2) * (i/steps);
+        const ax = cx + Math.cos(angle)*r, ay = cy + Math.sin(angle)*r;
+        const snapX = Math.round(ax/pixelPx)*pixelPx, snapY = Math.round(ay/pixelPx)*pixelPx;
+        for (let oy = -channelPx; oy < channelPx; oy += pixelPx) {
+          for (let ox = -channelPx; ox < channelPx; ox += pixelPx) {
+            const bx = snapX+ox, by = snapY+oy;
+            const worldPx = Math.round((centerWorldX + bx) / RIVER_PIXEL_SIZE);
+            const worldPy = Math.round((centerWorldY + by) / RIVER_PIXEL_SIZE);
+            ctx.fillStyle = colors[riverPixelShadeIndex(worldPx, worldPy)];
+            ctx.fillRect(bx, by, pixelPx+0.5, pixelPx+0.5);
+          }
+        }
+      }
     }
     ctx.restore();
   });
