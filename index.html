@@ -786,7 +786,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 144;
+const GAME_VERSION = 145;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -2768,6 +2768,9 @@ let parkZones = []; // Urban Hell only - see genTerrain's park-zone comment abov
 const ROAD_TILE_SIZE = 300;
 let roadGridCells = new Set();
 let roadGrid = [];
+let riverGridCells = new Set();
+let riverGrid = []; // finalized {col,row,tile,rotation} list, same shape as roadGrid - see finalizeRiverGrid
+let riverSolid = new Uint8Array(terrainCols * terrainRows); // baked impassable-river lookup, same O(1) convention as mountainSolid/lakeSolid/crevasseSolid - see bakeRiverSolidGrid
 
 // Direction vectors in grid space (col,row), keyed by compass direction -
 // used throughout the road system so "which neighbor is this" and "which
@@ -3020,6 +3023,258 @@ function aabbOverlapsRoad(x, y, hx, hy, pad) {
   }
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// Rivers: laid on the exact same 300x300 tile grid as roads (ROAD_TILE_SIZE),
+// which is what makes a road/river overlap meaningful as "a bridge" - built
+// the same way roads are (a walked path, tile/rotation derived purely from
+// which neighboring cells are also river), but deliberately simpler in two
+// ways: only ever a single unbranched line (never a tjunction/cross tile),
+// and always walked from one map edge to another rather than connecting
+// specific points like bases or depots. "Simple blue artwork" for this first
+// implementation - no photographic tiles, just a flat colored strip drawn
+// directly (see drawRivers), matching straight/curve geometry only.
+// ---------------------------------------------------------------------------
+const RIVER_TILE_NATIVE_DIRS = { straight: ['N','S'], curve: ['N','E'] };
+
+function riverCellBlockedByTerrain(col, row) {
+  // Same 7x7-lattice-over-the-tile technique roadCellBlockedByTerrain uses,
+  // and the same three grids (mountain/lake/crevasse) - "rivers will not
+  // intersect with mountains" is satisfied here at generation time (the
+  // walker simply never steps onto a blocked cell), the same way roads
+  // already avoid mountains/lakes. Deliberately does NOT check roadSolid/
+  // roadGrid - a river crossing a road is exactly the bridge case the
+  // rules ask for, not something to route around.
+  const samples = [20, 60, 100, 140, 180, 220, 280];
+  for (const sy of samples) {
+    for (const sx of samples) {
+      const wx = col*ROAD_TILE_SIZE + sx;
+      const wy = row*ROAD_TILE_SIZE + sy;
+      if (
+        wx < 0 || wy < 0 || wx > WORLD.w || wy > WORLD.h ||
+        mountainSolid[
+          Math.max(0, Math.min(terrainRows-1, Math.round(wy/TERRAIN_CELL))) * terrainCols +
+          Math.max(0, Math.min(terrainCols-1, Math.round(wx/TERRAIN_CELL)))
+        ] === 1 ||
+        lakeSolid[
+          Math.max(0, Math.min(terrainRows-1, Math.round(wy/TERRAIN_CELL))) * terrainCols +
+          Math.max(0, Math.min(terrainCols-1, Math.round(wx/TERRAIN_CELL)))
+        ] === 1 ||
+        crevasseSolid[
+          Math.max(0, Math.min(terrainRows-1, Math.round(wy/TERRAIN_CELL))) * terrainCols +
+          Math.max(0, Math.min(terrainCols-1, Math.round(wx/TERRAIN_CELL)))
+        ] === 1
+      ) return true;
+    }
+  }
+  return false;
+}
+
+// Walks a single river from a random point on a random map edge to wherever
+// it happens to exit the map (any edge, not necessarily the opposite one) -
+// "stretch across the map from edge to edge, twisting and turning as they
+// go". No branching at all (unlike genRoadNetwork's walk, which spins off
+// side branches) - a river is always exactly one continuous line, which is
+// also exactly why finalizeRiverGrid below never needs a tjunction/cross
+// tile: no cell a non-branching walk visits can ever end up with more than
+// two river neighbors.
+function genRiverNetwork(rnd) {
+  const cellsW = Math.ceil(WORLD.w / ROAD_TILE_SIZE);
+  const cellsH = Math.ceil(WORLD.h / ROAD_TILE_SIZE);
+  const dirKeys = ['N','S','E','W'];
+  const maxSteps = cellsW + cellsH + 6; // generous enough to cross the map diagonally with some wandering room to spare
+  const straightBias = 0.82; // turns less often than a road walker (0.94) - "twisting and turning" wants a visibly wavier line than a road's mostly-straight highways
+
+  // A single walk attempt from one random edge point, returning the set of
+  // cells it actually covered. Unlike a road walker, this doesn't just stop
+  // dead the instant the next cell in its current direction is blocked -
+  // "mountains" cover a meaningful fraction of most maps, and a straight-
+  // line walker giving up at the very first obstacle it meets produced a
+  // real, measurable problem: roughly half of all attempts terminated
+  // within the first 1-3 cells, nowhere close to actually "stretching
+  // across the map". Instead, a blocked next-step tries every other
+  // direction (excluding a U-turn back the way it came) before giving up
+  // on this attempt entirely, so a river naturally bends around a mountain
+  // in its path rather than ending at it.
+  function attemptWalk() {
+    const edge = Math.floor(rnd()*4); // 0=top,1=bottom,2=left,3=right
+    let col, row, dir;
+    if (edge === 0) { col = Math.floor(rnd()*cellsW); row = 0; dir = 'S'; }
+    else if (edge === 1) { col = Math.floor(rnd()*cellsW); row = cellsH-1; dir = 'N'; }
+    else if (edge === 2) { col = 0; row = Math.floor(rnd()*cellsH); dir = 'E'; }
+    else { col = cellsW-1; row = Math.floor(rnd()*cellsH); dir = 'W'; }
+
+    // If the chosen edge cell itself is blocked (a mountain sitting right on
+    // the border), slide along that same edge looking for a clear starting
+    // point rather than giving up on this attempt immediately.
+    if (riverCellBlockedByTerrain(col, row)) {
+      let found = false;
+      if (edge === 0 || edge === 1) {
+        for (let c=0;c<cellsW;c++) { if (!riverCellBlockedByTerrain(c,row)) { col=c; found=true; break; } }
+      } else {
+        for (let r=0;r<cellsH;r++) { if (!riverCellBlockedByTerrain(col,r)) { row=r; found=true; break; } }
+      }
+      if (!found) return new Set();
+    }
+
+    const cells = new Set();
+    for (let step=0; step<maxSteps; step++) {
+      cells.add(roadCellKey(col,row));
+      let nextDir = dir;
+      if (rnd() > straightBias) {
+        const opposite = {N:'S',S:'N',E:'W',W:'E'}[dir];
+        const choices = dirKeys.filter(d => d !== opposite);
+        nextDir = choices[Math.floor(rnd()*choices.length)];
+      }
+      let nc = col+ROAD_DIRS[nextDir].dc, nr = row+ROAD_DIRS[nextDir].dr;
+      if (riverCellBlockedByTerrain(nc, nr)) {
+        // Blocked ahead: try every other direction (never the U-turn back
+        // the way this walker came) before giving up on this attempt -
+        // this is what lets a river bend around a mountain instead of
+        // simply ending at the first one it meets.
+        const opposite = {N:'S',S:'N',E:'W',W:'E'}[dir];
+        const alternatives = dirKeys.filter(d => d !== opposite && d !== nextDir);
+        let foundAlt = false;
+        for (const alt of alternatives) {
+          const ac = col+ROAD_DIRS[alt].dc, ar = row+ROAD_DIRS[alt].dr;
+          if (!riverCellBlockedByTerrain(ac, ar)) { nextDir = alt; nc = ac; nr = ar; foundAlt = true; break; }
+        }
+        if (!foundAlt) break; // genuinely boxed in on every side - end this attempt here
+      }
+      dir = nextDir; col = nc; row = nr;
+      if (col < -1 || col > cellsW || row < -1 || row > cellsH) break; // stop as soon as it's genuinely left the map, unlike roads which linger a couple of cells past the edge for visual continuity - a river has no equivalent "it continues into the wider world" convention to preserve
+    }
+    return cells;
+  }
+
+  // Try a handful of attempts and keep the longest one - "stretch across
+  // the map from edge to edge" is the whole point of a river, so a 1-2 cell
+  // stub (an edge point that immediately ran into a wall of mountains on
+  // every side) isn't an acceptable result when trying again costs nothing
+  // and usually finds a genuinely long path instead.
+  let best = new Set();
+  for (let attempt=0; attempt<6; attempt++) {
+    const result = attemptWalk();
+    if (result.size > best.size) best = result;
+    if (best.size >= Math.min(cellsW, cellsH)) break; // long enough to genuinely cross the map's shorter dimension - good enough, stop early
+  }
+  riverGridCells = best;
+}
+
+// Converts riverGridCells into the finalized riverGrid array drawRivers/
+// isPointOnRiver/aabbOverlapsRiver/bakeRiverSolidGrid all read - identical
+// technique to finalizeRoadGrid, but only ever tries 'straight' and 'curve'
+// candidates: a non-branching walk can only ever produce 1-2 connections
+// per cell, so tjunction/cross (3-4 connections) are never actually needed,
+// and leaving them out of the candidate list here is what guarantees "will
+// not branch off into crossroads or t-intersections" structurally, rather
+// than just as a generation-time accident.
+function finalizeRiverGrid() {
+  riverGrid = [];
+  riverGridCells.forEach(key => {
+    const [col,row] = key.split(',').map(Number);
+    const connected = [];
+    Object.keys(ROAD_DIRS).forEach(dir => {
+      const nc = col+ROAD_DIRS[dir].dc, nr = row+ROAD_DIRS[dir].dr;
+      if (riverGridCells.has(roadCellKey(nc,nr))) connected.push(dir);
+    });
+    if (connected.length === 0) return;
+    const effectiveConnected = connected.length === 1
+      ? [connected[0], {N:'S',S:'N',E:'W',W:'E'}[connected[0]]]
+      : connected;
+    let tile = null, rotation = 0;
+    for (const candidate of ['straight','curve']) {
+      const native = RIVER_TILE_NATIVE_DIRS[candidate];
+      if (native.length !== effectiveConnected.length) continue;
+      for (let r=0; r<4; r++) {
+        if (dirSetsMatch(rotateDirSetCW(native, r), effectiveConnected)) {
+          tile = candidate; rotation = r; break;
+        }
+      }
+      if (tile) break;
+    }
+    if (!tile) return;
+    riverGrid.push({ col, row, tile, rotation });
+  });
+}
+
+// Point/rectangle river checks, identical geometry and reasoning to
+// isPointOnRoad/aabbOverlapsRoad above - see those for why a circle-radius
+// pad suits round things (trees) and an AABB suits rectangular ones
+// (buildings/compounds). Used for keeping trees/buildings/lakes off rivers
+// at generation time, and (with pad 0) as part of removeRoadOverlaps'
+// cleanup sweep and bakeRiverSolidGrid's movement-blocking bake.
+const RIVER_CHANNEL_HALF_WIDTH = ROAD_TILE_SIZE * 0.22;
+function isPointOnRiver(x, y, pad) {
+  if (!riverGrid.length) return false;
+  const halfLength = ROAD_TILE_SIZE/2;
+  for (const cell of riverGrid) {
+    const cx = cell.col*ROAD_TILE_SIZE + ROAD_TILE_SIZE/2;
+    const cy = cell.row*ROAD_TILE_SIZE + ROAD_TILE_SIZE/2;
+    if (Math.abs(x-cx) > halfLength+pad || Math.abs(y-cy) > halfLength+pad) continue;
+    const dirs = rotateDirSetCW(RIVER_TILE_NATIVE_DIRS[cell.tile], cell.rotation);
+    if ((dirs.includes('N') || dirs.includes('S')) &&
+        Math.abs(x-cx) < RIVER_CHANNEL_HALF_WIDTH+pad && Math.abs(y-cy) < halfLength+pad) return true;
+    if ((dirs.includes('E') || dirs.includes('W')) &&
+        Math.abs(x-cx) < halfLength+pad && Math.abs(y-cy) < RIVER_CHANNEL_HALF_WIDTH+pad) return true;
+  }
+  return false;
+}
+function aabbOverlapsRiver(x, y, hx, hy, pad) {
+  if (!riverGrid.length) return false;
+  const halfLength = ROAD_TILE_SIZE/2;
+  const search = Math.max(hx,hy) + halfLength + RIVER_CHANNEL_HALF_WIDTH + pad;
+  for (const cell of riverGrid) {
+    const cx = cell.col*ROAD_TILE_SIZE + ROAD_TILE_SIZE/2;
+    const cy = cell.row*ROAD_TILE_SIZE + ROAD_TILE_SIZE/2;
+    if (Math.hypot(cx-x,cy-y) > search) continue;
+    const dirs = rotateDirSetCW(RIVER_TILE_NATIVE_DIRS[cell.tile], cell.rotation);
+    if ((dirs.includes('N') || dirs.includes('S')) &&
+        Math.abs(x-cx) < (hx+RIVER_CHANNEL_HALF_WIDTH+pad) && Math.abs(y-cy) < (hy+halfLength+pad)) return true;
+    if ((dirs.includes('E') || dirs.includes('W')) &&
+        Math.abs(x-cx) < (hx+halfLength+pad) && Math.abs(y-cy) < (hy+RIVER_CHANNEL_HALF_WIDTH+pad)) return true;
+  }
+  return false;
+}
+
+// Bakes riverGrid's actual water-channel footprint into an O(1) lookup grid,
+// the same convention mountainSolid/lakeSolid/crevasseSolid already use -
+// isMountain (the single choke point pathfinding/collision/placement all
+// call) can then just check one more flat array instead of scanning
+// riverGrid on every single call, which matters since isMountain runs very
+// frequently. "Units cannot cross rivers except on roads" (bridges) is
+// implemented right here, once, at bake time: any point that's on BOTH a
+// river's channel AND a road's paved strip is deliberately left OUT of
+// riverSolid, rather than marked impassable and then un-blocked some other
+// way - a bridge is simply river geometry with a hole punched in it exactly
+// where a road already crosses.
+function bakeRiverSolidGrid() {
+  riverSolid.fill(0);
+  const halfLength = ROAD_TILE_SIZE/2;
+  riverGrid.forEach(cell => {
+    const cx = cell.col*ROAD_TILE_SIZE + ROAD_TILE_SIZE/2;
+    const cy = cell.row*ROAD_TILE_SIZE + ROAD_TILE_SIZE/2;
+    const dirs = rotateDirSetCW(RIVER_TILE_NATIVE_DIRS[cell.tile], cell.rotation);
+    const hasVert = dirs.includes('N') || dirs.includes('S');
+    const hasHoriz = dirs.includes('E') || dirs.includes('W');
+    const col0 = Math.max(0, Math.floor((cx-halfLength)/TERRAIN_CELL));
+    const col1 = Math.min(terrainCols-1, Math.ceil((cx+halfLength)/TERRAIN_CELL));
+    const row0 = Math.max(0, Math.floor((cy-halfLength)/TERRAIN_CELL));
+    const row1 = Math.min(terrainRows-1, Math.ceil((cy+halfLength)/TERRAIN_CELL));
+    for (let row=row0; row<=row1; row++) {
+      for (let col=col0; col<=col1; col++) {
+        const wx = col*TERRAIN_CELL, wy = row*TERRAIN_CELL;
+        const dx = wx-cx, dy = wy-cy;
+        const inChannel = (hasVert && Math.abs(dx) < RIVER_CHANNEL_HALF_WIDTH && Math.abs(dy) <= halfLength) ||
+                           (hasHoriz && Math.abs(dy) < RIVER_CHANNEL_HALF_WIDTH && Math.abs(dx) <= halfLength);
+        if (inChannel && !isPointOnRoad(wx, wy, 0)) {
+          riverSolid[row*terrainCols+col] = 1;
+        }
+      }
+    }
+  });
+}
+
 // Final safety net, run once after every placement pass (trees, compounds,
 // buildings) has finished: sweep away anything that still ended up sitting
 // on the actual paved road surface despite each pass's own road-avoidance
@@ -3037,7 +3292,7 @@ function aabbOverlapsRoad(x, y, hx, hy, pad) {
 // roadCellBlockedByTerrain), so by the time a road exists it never crosses
 // ground one of those already occupies in the first place.
 function removeRoadOverlaps() {
-  trees = trees.filter(t => !isPointOnRoad(t.x, t.y, t.radius));
+  trees = trees.filter(t => !isPointOnRoad(t.x, t.y, t.radius) && !isPointOnRiver(t.x, t.y, t.radius));
   // Buildings and compounds are rectangular footprints, not circles - see
   // aabbOverlapsRoad's own comment for why isPointOnRoad's circle-radius
   // pad (what this used before) badly over-culled them: treating a
@@ -3045,35 +3300,36 @@ function removeRoadOverlaps() {
   // building in a dense city as "overlapping" a nearby road even when its
   // actual rectangular footprint had a perfectly real gap from the payment.
   buildings = buildings.filter(b => {
-    if (!b.footprint) return !aabbOverlapsRoad(b.x, b.y, 30, 30, 4);
+    if (!b.footprint) return !aabbOverlapsRoad(b.x, b.y, 30, 30, 4) && !aabbOverlapsRiver(b.x, b.y, 30, 30, 4);
     const cells = b.footprint.cells;
     const cellSize = b.footprint.cellSize;
     const minx = Math.min(...cells.map(c=>c[0])), maxx = Math.max(...cells.map(c=>c[0]));
     const miny = Math.min(...cells.map(c=>c[1])), maxy = Math.max(...cells.map(c=>c[1]));
     const hx = (maxx-minx+1)*cellSize/2, hy = (maxy-miny+1)*cellSize/2;
-    return !aabbOverlapsRoad(b.x, b.y, hx, hy, 4);
+    return !aabbOverlapsRoad(b.x, b.y, hx, hy, 4) && !aabbOverlapsRiver(b.x, b.y, hx, hy, 4);
   });
-  compounds = compounds.filter(c => !aabbOverlapsRoad(c.x, c.y, c.hx||30, c.hy||30, 4));
-  // Mountains/lakes/crevasses are placed long before roads exist (roads are
-  // the very last thing genTerrain lays down), so they can't check this
-  // themselves at placement time the way everything above can - instead,
-  // road generation tries to route AROUND anything already there (see
-  // roadCellBlockedByTerrain), which normally works, but a road's path is
-  // also shaped by things that have nothing to do with terrain (matching an
-  // existing road it's connecting to, a preferred route toward a base) and
-  // can rarely still thread through the edge of one of these despite that.
-  // Culling the rare straggler here - rather than trying to make road
-  // generation itself perfectly avoid every case - is the same "catch
-  // whatever the individual pass missed centrally" approach as the rest of
-  // this function, and simply removing one mountain/lake/crevasse out of
-  // several dozen is a far smaller visual change than leaving a road paved
-  // straight through one. The affected collision grids are rebaked
-  // afterward so pathfinding/fire-blocking immediately reflect the pruned
-  // lists rather than still treating a just-removed feature as solid.
+  compounds = compounds.filter(c => !aabbOverlapsRoad(c.x, c.y, c.hx||30, c.hy||30, 4) && !aabbOverlapsRiver(c.x, c.y, c.hx||30, c.hy||30, 4));
+  // Mountains/lakes/crevasses are placed long before roads (or rivers) exist
+  // (both are the very last things genTerrain lays down), so they can't
+  // check this themselves at placement time the way everything above can -
+  // instead, road/river generation tries to route AROUND anything already
+  // there (see roadCellBlockedByTerrain/riverCellBlockedByTerrain), which
+  // normally works, but a path's route is also shaped by things that have
+  // nothing to do with terrain (matching an existing road it's connecting
+  // to, a preferred route toward a base) and can rarely still thread
+  // through the edge of one of these despite that. Culling the rare
+  // straggler here - rather than trying to make generation itself perfectly
+  // avoid every case - is the same "catch whatever the individual pass
+  // missed centrally" approach as the rest of this function, and simply
+  // removing one mountain/lake/crevasse out of several dozen is a far
+  // smaller visual change than leaving a road or river cut straight through
+  // one. The affected collision grids are rebaked afterward so pathfinding/
+  // fire-blocking immediately reflect the pruned lists rather than still
+  // treating a just-removed feature as solid.
   const mountainsBefore = mountains.length, lakesBefore = lakes.length, crevassesBefore = crevasses.length;
-  mountains = mountains.filter(m => !isPointOnRoad(m.x, m.y, Math.max(m.rx, m.ry)));
-  lakes = lakes.filter(l => !isPointOnRoad(l.x, l.y, Math.max(l.rx, l.ry)));
-  crevasses = crevasses.filter(c => !isPointOnRoad(c.x, c.y, Math.max(c.rx, c.ry)));
+  mountains = mountains.filter(m => !isPointOnRoad(m.x, m.y, Math.max(m.rx, m.ry)) && !isPointOnRiver(m.x, m.y, Math.max(m.rx, m.ry)));
+  lakes = lakes.filter(l => !isPointOnRoad(l.x, l.y, Math.max(l.rx, l.ry)) && !isPointOnRiver(l.x, l.y, Math.max(l.rx, l.ry)));
+  crevasses = crevasses.filter(c => !isPointOnRoad(c.x, c.y, Math.max(c.rx, c.ry)) && !isPointOnRiver(c.x, c.y, Math.max(c.rx, c.ry)));
   if (mountains.length !== mountainsBefore) bakeMountainSolidGrid();
   if (lakes.length !== lakesBefore) bakeLakeSolidGrid();
   if (crevasses.length !== crevassesBefore) bakeCrevasseSolidGrid();
@@ -3554,6 +3810,15 @@ function genTerrain(seedValue){
   // ---------------------------------------------------------------------------
   roadGridCells = new Set(); // world-grid "col,row" keys (see ROAD_TILE_SIZE) of every cell that has a road
   roadGrid = []; // finalized {col,row,tile,rotation} list, computed once generation is done - see finalizeRoadGrid below
+  // Reset unconditionally, same reasoning as roadGridCells/roadGrid above -
+  // genRiverNetwork only runs conditionally below (Jungle has no roads to
+  // ever bridge a river, and even biomes that do have roads only roll one
+  // river about half the time), so without this a map that DOESN'T get a
+  // river this time would otherwise keep rendering and blocking movement
+  // on whatever river the PREVIOUS map generation left behind.
+  riverGridCells = new Set();
+  riverGrid = [];
+  riverSolid.fill(0);
   fortressCityCenterZone = computeFortressCityCenterZone(); // reset unconditionally (null for every biome but Fortress City) regardless of whether the block below even runs
   if (biomeCfg.buildingStyle) {
     // Roads are snapped to the 300x300 tile grid, but a whole tile must also
@@ -3609,6 +3874,18 @@ function genTerrain(seedValue){
       }
     }
     finalizeRoadGrid();
+    // "Re-introduce rivers" - generated right after roads, in every biome
+    // that has roads at all (nested in this same `if (biomeCfg.buildingStyle)`
+    // block deliberately excludes Jungle, which has none - a river with no
+    // roads to ever bridge it would simply cut the map in half with no way
+    // across). Not guaranteed on every map even then - "rivers" are a
+    // roughly 50/50 feature, so plenty of matches still have none at all,
+    // same as how not every map rolls an edge-cropped lake either.
+    if (rnd() < 0.5) {
+      genRiverNetwork(rnd);
+      finalizeRiverGrid();
+      bakeRiverSolidGrid();
+    }
   }
 }
 genTerrain(terrainSeed);
@@ -3628,18 +3905,27 @@ function isCrevasseSolidAt(x, y) {
   const row = Math.max(0, Math.min(terrainRows-1, Math.round(y/TERRAIN_CELL)));
   return crevasseSolid[row*terrainCols+col] === 1;
 }
+function isRiverSolidAt(x, y) {
+  const col = Math.max(0, Math.min(terrainCols-1, Math.round(x/TERRAIN_CELL)));
+  const row = Math.max(0, Math.min(terrainRows-1, Math.round(y/TERRAIN_CELL)));
+  return riverSolid[row*terrainCols+col] === 1;
+}
 // isMountain is the single choke point every piece of pathfinding, unit
 // collision, and placement logic in the file calls to ask "is this spot
-// impassable to walk through" - mountains, lakes AND crevasses all count,
-// since all three block movement equally. Combat is the one exception:
-// "lakes/crevasses do not restrict line of sight or weapon fire - you can
-// fire over them" - so sight/fire checks use lineBlockedBySight instead
-// (see below), which only tests isMountainSolidAt, deliberately leaving
-// both out.
+// impassable to walk through" - mountains, lakes, crevasses AND (new)
+// rivers all count, since all four block movement equally. "Units cannot
+// cross rivers except on roads" is already fully resolved by the time this
+// runs: riverSolid itself has a hole punched in it wherever a road crosses
+// (see bakeRiverSolidGrid), so a bridge point simply never reads as
+// impassable here in the first place - this function doesn't need to know
+// bridges exist at all. Combat is the one exception across all four: "you
+// can fire over them" - so sight/fire checks use lineBlockedBySight instead
+// (see below), which only tests isMountainSolidAt, deliberately leaving all
+// three water/chasm features out.
 function isMountain(x, y) {
   if (appState === 'test') return false; // test arena is always fully open, regardless of the underlying terrain seed
   if (x<0||y<0||x>WORLD.w||y>WORLD.h) return true;
-  return isMountainSolidAt(x,y) || isLakeSolidAt(x,y) || isCrevasseSolidAt(x,y);
+  return isMountainSolidAt(x,y) || isLakeSolidAt(x,y) || isCrevasseSolidAt(x,y) || isRiverSolidAt(x,y);
 }
 // Rendering-only check for whether a given point is specifically a LAKE
 // (not a mountain) - kept for anything that wants to tell the two apart
@@ -3875,6 +4161,7 @@ function genTrees(seedValue) {
     if (Math.hypot(x-blueBaseStart.x, y-blueBaseStart.y) < baseClearance) return false;
     if (Math.hypot(x-redBaseStart.x, y-redBaseStart.y) < baseClearance) return false;
     if (isPointOnRoad(x,y,TREE_COLLISION_RADIUS)) return false;
+    if (isPointOnRiver(x,y,TREE_COLLISION_RADIUS)) return false;
     // Keep the centerBuildingBlock zone (Fortress City's downtown, Jungle's
     // clearing) actually clear for buildings to go into. Fortress City gets
     // this for free from its own real street grid there (trees already
@@ -5146,6 +5433,7 @@ function applyMapSize(sizeKey, randomizeCorners=true) {
   mountainSolid = new Uint8Array(terrainCols * terrainRows);
   lakeSolid = new Uint8Array(terrainCols * terrainRows);
   crevasseSolid = new Uint8Array(terrainCols * terrainRows);
+  riverSolid = new Uint8Array(terrainCols * terrainRows);
 
   navCols = Math.ceil(WORLD.w / NAV_CELL) + 1;
   navRows = Math.ceil(WORLD.h / NAV_CELL) + 1;
@@ -5548,6 +5836,19 @@ function generateNewMap(sizeKey, biomeKey) {
   genCompounds(terrainSeed);
   genBuildings(terrainSeed);
   removeRoadOverlaps();
+  // riverSolid was baked once, inside genTerrain, right after the MAIN road
+  // network was finalized - but genBuildings (just above) can still add
+  // MORE road cells after that point (village anchors extending a local
+  // street grid, or Fortress City's center-district street grid), and a
+  // village anchor point in particular is added to roadGridCells with no
+  // check at all for whether it happens to land on an existing river cell.
+  // A road cell added after the original bake that turns out to overlap a
+  // river would keep reading as impassable forever (a "missing" bridge that
+  // should have opened up) without this - re-baking now, once genBuildings
+  // has genuinely finished adding every road cell it ever will, is what
+  // makes "roads can cross rivers" hold for every road, not just the ones
+  // that existed at the moment genTerrain finished.
+  if (riverGrid.length) bakeRiverSolidGrid();
   // removeRoadOverlaps can prune a mountain/lake/crevasse that turned out to
   // overlap a road (see its own comment) - navBlocked was already baked
   // from the pre-pruning terrain by the buildNavGrid() call above, so it
@@ -11126,6 +11427,7 @@ function serializeGame() {
     // Roads are actual map tiles, so preserve the exact tile/rotation layout
     // rather than regenerating a new road network from the seed.
     roadGrid: roadGrid.map(r => Object.assign({}, r)),
+    riverGrid: riverGrid.map(r => Object.assign({}, r)),
     roadGridCells: Array.from(roadGridCells),
     supply: { blue: supply.blue, red: supply.red },
     camera: { x: camera.x, y: camera.y, zoom: camera.zoom },
@@ -11367,6 +11669,7 @@ function applyLoadedGame(data) {
     mountainSolid = new Uint8Array(terrainCols * terrainRows);
     lakeSolid = new Uint8Array(terrainCols * terrainRows);
     crevasseSolid = new Uint8Array(terrainCols * terrainRows);
+    riverSolid = new Uint8Array(terrainCols * terrainRows);
     navCols = Math.ceil(WORLD.w / NAV_CELL) + 1;
     navRows = Math.ceil(WORLD.h / NAV_CELL) + 1;
     navBlocked = new Uint8Array(navCols * navRows);
@@ -11437,11 +11740,23 @@ function applyLoadedGame(data) {
     crevasses = Array.isArray(data.crevasses) ? data.crevasses.map(c => Object.assign({}, c)) : [];
     crevasseSolid = new Uint8Array(terrainCols * terrainRows);
     bakeCrevasseSolidGrid();
+    // Rivers: saves from before this feature existed simply come back with
+    // no river at all - riverGrid/riverGridCells default to empty and
+    // riverSolid stays entirely unset, exactly like an ordinary map that
+    // just didn't roll one.
+    riverGrid = Array.isArray(data.riverGrid) ? data.riverGrid.map(r => Object.assign({}, r)) : [];
+    riverGridCells = new Set(riverGrid.map(r => roadCellKey(r.col, r.row)));
+    riverSolid = new Uint8Array(terrainCols * terrainRows);
     rivers = Array.isArray(data.rivers) ? data.rivers.map(r => Object.assign({}, r)) : [];
     parkZones = Array.isArray(data.parkZones) ? data.parkZones.map(z => Object.assign({}, z)) : [];
     roadGrid = data.roadGrid.map(r => Object.assign({}, r));
     roadGridCells = new Set(Array.isArray(data.roadGridCells) ? data.roadGridCells :
       roadGrid.map(r => roadCellKey(r.col, r.row)));
+    // Baked only now that roadGrid is actually restored - bakeRiverSolidGrid
+    // needs the real road layout to correctly punch bridge holes (see its
+    // own comment); baking any earlier would treat every river cell as
+    // un-bridged, since roadGrid would still be empty/stale at that point.
+    bakeRiverSolidGrid();
     buildNavGrid();
   } else if (typeof data.terrainSeed === 'number') {
     genTerrain(data.terrainSeed);
@@ -11926,11 +12241,15 @@ function render() {
   ctx.lineWidth = 2;
   ctx.strokeRect(tl.x, tl.y, br.x-tl.x, br.y-tl.y);
 
-  // Rivers drawn early, right on top of the base ground fill - they're
-  // crossable terrain (not an impassable mass like mountains/lakes), so
-  // they belong at the same visual layer as the ground itself, with
-  // everything else (damage, decorations, units) able to render on top of
-  // them exactly as it would over open ground.
+  // Rivers drawn early, right on top of the base ground fill, with roads
+  // drawn immediately after (see below) - since roads are the only way
+  // across a river (a bridge), drawing roads second means a road tile that
+  // happens to share a cell with a river paints right over it there,
+  // reading naturally as "the road crosses on a bridge" without needing any
+  // dedicated bridge artwork of its own. Everything else (buildings,
+  // decorations, units) renders on top of both, same as it would over open
+  // ground - the only thing actually different about a river underneath is
+  // that isMountain treats it as impassable outside of that bridge.
   if (appState !== 'test') drawRivers();
 
   // Roads: same ground-layer tier as rivers (drawn early, purely cosmetic,
@@ -12613,49 +12932,75 @@ function drawRoads() {
   });
 }
 
-function buildSmoothedRiverPath(waypoints) {
-  const path = new Path2D();
-  if (waypoints.length < 2) return path;
-  const pts = waypoints.map(wp => worldToScreen(wp.x, wp.y));
-  path.moveTo(pts[0].x, pts[0].y);
-  for (let i=1; i<pts.length-1; i++) {
-    const mx = (pts[i].x+pts[i+1].x)/2, my = (pts[i].y+pts[i+1].y)/2;
-    path.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
-  }
-  const last = pts[pts.length-1];
-  path.lineTo(last.x, last.y);
-  return path;
-}
+// Simple flat-color tile renderer for rivers - "for the first implementation
+// just create simple blue artwork for the rivers" - no photographic tiles,
+// just filled strokes along each tile's actual channel geometry (the exact
+// same channel width/position bakeRiverSolidGrid uses for collision, so the
+// visible water always matches where it actually blocks movement). Straight
+// tiles are a simple line down the middle; curve tiles are a quarter-circle
+// arc connecting the two open edges, giving the bend a smooth, natural
+// sweep rather than a sharp right-angle turn. Reuses the same
+// bank/water/highlight three-layer look the old waypoint-based river
+// renderer had, just applied per-tile instead of along one continuous
+// smoothed path.
 function drawRivers() {
-  if (!rivers.length) return;
-  rivers.forEach(river => {
-    const path = buildSmoothedRiverPath(river.waypoints);
-    const widthPx = Math.max(1, river.width*camera.zoom);
-
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    // Bank layer: a wider, darker stroke underneath the main water body,
-    // giving the river a defined edge/shadow rather than a single flat
-    // color blending straight into the surrounding ground.
-    ctx.strokeStyle = PALETTE.riverBank || shadeHexColor(PALETTE.riverWater, -18);
-    ctx.lineWidth = widthPx * 1.22;
-    ctx.stroke(path);
-
-    // Main water fill.
-    ctx.strokeStyle = PALETTE.riverWater;
-    ctx.lineWidth = widthPx;
-    ctx.stroke(path);
-
-    // Flow highlight: a thinner, lighter stroke offset toward one side
-    // rather than centered, suggesting a current/reflection rather than a
-    // perfectly flat, uniform fill - reads as moving water at a glance
-    // instead of a static painted stripe.
+  if (!riverGrid.length) return;
+  const topLeft = screenToWorld(0,0);
+  const botRight = screenToWorld(viewportWidth(), viewportHeight());
+  const margin = ROAD_TILE_SIZE;
+  const waterColor = PALETTE.riverWater || '#2f6b8a';
+  const bankColor = PALETTE.riverBank || shadeHexColor(waterColor, -18);
+  const highlightColor = PALETTE.riverHighlight || shadeHexColor(waterColor, 30);
+  const channelWidthPx = RIVER_CHANNEL_HALF_WIDTH * 2 * camera.zoom;
+  riverGrid.forEach(cell => {
+    const wx = cell.col*ROAD_TILE_SIZE, wy = cell.row*ROAD_TILE_SIZE;
+    if (wx+ROAD_TILE_SIZE < topLeft.x-margin || wx > botRight.x+margin) return;
+    if (wy+ROAD_TILE_SIZE < topLeft.y-margin || wy > botRight.y+margin) return;
+    const centerWorldX = wx + ROAD_TILE_SIZE/2, centerWorldY = wy + ROAD_TILE_SIZE/2;
+    const s = worldToScreen(centerWorldX, centerWorldY);
+    const halfSizePx = (ROAD_TILE_SIZE/2) * camera.zoom;
     ctx.save();
-    ctx.globalAlpha = 0.35;
-    ctx.strokeStyle = PALETTE.riverHighlight || shadeHexColor(PALETTE.riverWater, 30);
-    ctx.lineWidth = Math.max(1, widthPx * 0.28);
-    ctx.stroke(path);
+    ctx.translate(s.x, s.y);
+    ctx.rotate(cell.rotation * Math.PI/2); // rotation is stored as a 0-3 quarter-turn count, same convention as roadGrid
+    ctx.lineCap = 'butt';
+    const layers = [
+      { color: bankColor, width: channelWidthPx*1.22, alpha: 1 },
+      { color: waterColor, width: channelWidthPx, alpha: 1 },
+      { color: highlightColor, width: Math.max(1, channelWidthPx*0.28), alpha: 0.35 }
+    ];
+    if (cell.tile === 'straight') {
+      // Native N-S: a straight vertical channel through the tile's middle,
+      // extended half a pixel past each edge so adjacent tiles butt up with
+      // no visible seam.
+      layers.forEach((layer, i) => {
+        ctx.save();
+        ctx.globalAlpha = layer.alpha;
+        ctx.strokeStyle = layer.color;
+        ctx.lineWidth = layer.width;
+        ctx.beginPath();
+        const xOff = i===2 ? -channelWidthPx*0.15 : 0; // highlight offset to one side, suggesting current/reflection rather than a flat fill
+        ctx.moveTo(xOff, -halfSizePx-1);
+        ctx.lineTo(xOff, halfSizePx+1);
+        ctx.stroke();
+        ctx.restore();
+      });
+    } else {
+      // Native N-E: a quarter-circle bend, centered on the tile's top-right
+      // corner, sweeping from the top edge (N) around to the right edge (E)
+      // - a smooth curve rather than a sharp right-angle turn.
+      const cx = halfSizePx, cy = -halfSizePx;
+      layers.forEach((layer, i) => {
+        ctx.save();
+        ctx.globalAlpha = layer.alpha;
+        ctx.strokeStyle = layer.color;
+        ctx.lineWidth = layer.width;
+        const r = i===2 ? halfSizePx*0.88 : halfSizePx; // highlight arc pulled slightly inward, same "offset toward one side" idea as the straight case
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, Math.PI, Math.PI/2, true);
+        ctx.stroke();
+        ctx.restore();
+      });
+    }
     ctx.restore();
   });
 }
