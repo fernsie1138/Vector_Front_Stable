@@ -789,7 +789,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 154;
+const GAME_VERSION = 155;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -1036,7 +1036,12 @@ const MOUNTAIN_DATA_URIS = {"mt1": "assets/terrain/mountains/mt1.png", "mt2": "a
 // pick from these keys instead of the normal snowy/bare ones specifically
 // for Wasteland.
 const WASTELAND_MOUNTAIN_TYPES = [{"key": "wm1", "aspectRatio": 1.0558, "snowy": false}, {"key": "wm2", "aspectRatio": 1.0398, "snowy": false}, {"key": "wm3", "aspectRatio": 1.1116, "snowy": false}, {"key": "wm4", "aspectRatio": 0.996, "snowy": false}, {"key": "wm5", "aspectRatio": 1.0115, "snowy": false}, {"key": "wm6", "aspectRatio": 0.9962, "snowy": false}, {"key": "wm7", "aspectRatio": 1.0649, "snowy": false}, {"key": "wm8", "aspectRatio": 0.9542, "snowy": false}, {"key": "wm9", "aspectRatio": 1.0729, "snowy": false}, {"key": "wm10", "aspectRatio": 1.0966, "snowy": false}, {"key": "wm11", "aspectRatio": 1.1215, "snowy": false}, {"key": "wm12", "aspectRatio": 1.0121, "snowy": false}];
-const WASTELAND_MOUNTAIN_DATA_URIS = {"wm1": "assets/terrain/wasteland_mountains/wmtn_01.png", "wm2": "assets/terrain/wasteland_mountains/wmtn_02.png", "wm3": "assets/terrain/wasteland_mountains/wmtn_03.png", "wm4": "assets/terrain/wasteland_mountains/wmtn_04.png", "wm5": "assets/terrain/wasteland_mountains/wmtn_05.png", "wm6": "assets/terrain/wasteland_mountains/wmtn_06.png", "wm7": "assets/terrain/wasteland_mountains/wmtn_07.png", "wm8": "assets/terrain/wasteland_mountains/wmtn_08.png", "wm9": "assets/terrain/wasteland_mountains/wmtn_09.png", "wm10": "assets/terrain/wasteland_mountains/wmtn_10.png", "wm11": "assets/terrain/wasteland_mountains/wmtn_11.png", "wm12": "assets/terrain/wasteland_mountains/wmtn_12.png"};
+// _v2 filenames are deliberate cache-busting, same reasoning as the river
+// tiles earlier - these files were edited in place (white lattice gaps in
+// the scaffolding piece, wm9, made transparent) under the same names they
+// had before, which a browser's image cache won't reliably notice on its
+// own.
+const WASTELAND_MOUNTAIN_DATA_URIS = {"wm1": "assets/terrain/wasteland_mountains/wmtn_01_v2.png", "wm2": "assets/terrain/wasteland_mountains/wmtn_02_v2.png", "wm3": "assets/terrain/wasteland_mountains/wmtn_03_v2.png", "wm4": "assets/terrain/wasteland_mountains/wmtn_04_v2.png", "wm5": "assets/terrain/wasteland_mountains/wmtn_05_v2.png", "wm6": "assets/terrain/wasteland_mountains/wmtn_06_v2.png", "wm7": "assets/terrain/wasteland_mountains/wmtn_07_v2.png", "wm8": "assets/terrain/wasteland_mountains/wmtn_08_v2.png", "wm9": "assets/terrain/wasteland_mountains/wmtn_09_v2.png", "wm10": "assets/terrain/wasteland_mountains/wmtn_10_v2.png", "wm11": "assets/terrain/wasteland_mountains/wmtn_11_v2.png", "wm12": "assets/terrain/wasteland_mountains/wmtn_12_v2.png"};
 const WASTELAND_MOUNTAIN_KEYS = WASTELAND_MOUNTAIN_TYPES.map(m=>m.key);
 const MOUNTAIN_SNOWY_KEYS = MOUNTAIN_TYPES.filter(m=>m.snowy).map(m=>m.key);
 const MOUNTAIN_BARE_KEYS = MOUNTAIN_TYPES.filter(m=>!m.snowy).map(m=>m.key);
