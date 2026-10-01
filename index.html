@@ -789,7 +789,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 152;
+const GAME_VERSION = 153;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -4440,6 +4440,19 @@ const TREE_COLLISION_RADIUS = 14; // vehicles are physically blocked from enteri
 // silhouettes rather than repeated vector blobs.
 const TREE_SPRITE_DATA = ["assets/terrain/trees/tree_00.png", "assets/terrain/trees/tree_01.png", "assets/terrain/trees/tree_02.png", "assets/terrain/trees/tree_03.png", "assets/terrain/trees/tree_04.png", "assets/terrain/trees/tree_05.png", "assets/terrain/trees/tree_06.png", "assets/terrain/trees/tree_07.png"];
 const TREE_SPRITES = TREE_SPRITE_DATA.map(src => { const img = new Image(); img.src = src; return img; });
+// Wasteland-specific replacement for the tree canopy art - "replace the
+// trees with these 10 pieces of wreckage which will be randomised on the
+// map... they function exactly like trees". This is deliberately ONLY a
+// different sprite set, drawn by the exact same drawTree function at the
+// exact same TREE_SPRITE_WORLD_SIZE/visualScale sizing and selected by the
+// same per-tree spriteIndex hash - every mechanic trees already have
+// (vehicles physically blocked, Infantry/Scout pass through via
+// TREE_PASSABLE_UNIT_TYPES, Mech/LRM Mech crush through via
+// OBSTACLE_CRUSHING_UNIT_TYPES, only destructible by explosive fire) is
+// untouched, since it's still the exact same `trees` array underneath -
+// only which image gets drawn for a "tree" on this one biome changes.
+const WRECKAGE_SPRITE_DATA = ["assets/terrain/wreckage/wreck_01.png", "assets/terrain/wreckage/wreck_02.png", "assets/terrain/wreckage/wreck_03.png", "assets/terrain/wreckage/wreck_04.png", "assets/terrain/wreckage/wreck_05.png", "assets/terrain/wreckage/wreck_06.png", "assets/terrain/wreckage/wreck_07.png", "assets/terrain/wreckage/wreck_08.png", "assets/terrain/wreckage/wreck_09.png", "assets/terrain/wreckage/wreck_10.png"];
+const WRECKAGE_SPRITES = WRECKAGE_SPRITE_DATA.map(src => { const img = new Image(); img.src = src; return img; });
 const TREE_SPRITE_WORLD_SIZE = TREE_COLLISION_RADIUS * 2.4; // top-down canopy sprites; trunks removed
 
 const TREE_MAX_HP = 60;
@@ -11511,8 +11524,16 @@ function drawTree(tree) {
   if (!isVisible(tree.x, tree.y) && !isExplored(tree.x, tree.y)) return;
   const s = worldToScreen(tree.x, tree.y);
   const dimmed = !isVisible(tree.x, tree.y);
-  const idx = Number.isFinite(tree.spriteIndex) ? Math.abs(tree.spriteIndex)%TREE_SPRITES.length : (Math.abs((tree.id||1)*7)%TREE_SPRITES.length);
-  const sprite = TREE_SPRITES[idx];
+  // Wasteland draws the same "tree" entities as randomized wreckage pieces
+  // instead of canopy art - everything else about this function (sizing,
+  // rotation, the destroyed-stump fallback) is identical regardless of which
+  // sprite set is active. Modulo against whichever set is actually active,
+  // not always TREE_SPRITES' own count - the two sets don't have to be the
+  // same length (10 wreckage pieces vs 8 tree canopies), and using the wrong
+  // one would silently waste some variety by never reaching every sprite.
+  const activeSprites = currentBiome === 'wasteland' ? WRECKAGE_SPRITES : TREE_SPRITES;
+  const idx = Number.isFinite(tree.spriteIndex) ? Math.abs(tree.spriteIndex)%activeSprites.length : (Math.abs((tree.id||1)*7)%activeSprites.length);
+  const sprite = activeSprites[idx];
   if (!sprite || !sprite.complete) return;
 
   // Raster sprites replace the old procedural vector/blob canopies. These sprites are pure top-down canopies with no visible trunks.  The
