@@ -789,7 +789,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 153;
+const GAME_VERSION = 154;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -1023,16 +1023,38 @@ function baseStageKeyFor(b) {
 // art's true proportions rather than assuming square.
 const MOUNTAIN_TYPES = [{"key": "mt1", "aspectRatio": 1.0158, "snowy": true}, {"key": "mt2", "aspectRatio": 1.0664, "snowy": false}, {"key": "mt3", "aspectRatio": 1.1057, "snowy": true}, {"key": "mt4", "aspectRatio": 0.9867, "snowy": true}, {"key": "mt5", "aspectRatio": 1.0369, "snowy": false}, {"key": "mt6", "aspectRatio": 0.9488, "snowy": true}, {"key": "mt7", "aspectRatio": 1.0817, "snowy": false}, {"key": "mt8", "aspectRatio": 0.9533, "snowy": true}, {"key": "mt9", "aspectRatio": 0.9733, "snowy": false}, {"key": "mt10", "aspectRatio": 1.1628, "snowy": true}, {"key": "mt11", "aspectRatio": 0.9956, "snowy": false}, {"key": "mt12", "aspectRatio": 1.0274, "snowy": true}];
 const MOUNTAIN_DATA_URIS = {"mt1": "assets/terrain/mountains/mt1.png", "mt2": "assets/terrain/mountains/mt2.png", "mt3": "assets/terrain/mountains/mt3.png", "mt4": "assets/terrain/mountains/mt4.png", "mt5": "assets/terrain/mountains/mt5.png", "mt6": "assets/terrain/mountains/mt6.png", "mt7": "assets/terrain/mountains/mt7.png", "mt8": "assets/terrain/mountains/mt8.png", "mt9": "assets/terrain/mountains/mt9.png", "mt10": "assets/terrain/mountains/mt10.png", "mt11": "assets/terrain/mountains/mt11.png", "mt12": "assets/terrain/mountains/mt12.png"};
+// "Wasteland Mountains" - 12 rubble/debris-pile images standing in for rock
+// mountains on this one biome, "incorporate these into the Wasteland map the
+// same way as mountains for the other maps". Merged directly into the SAME
+// MOUNTAIN_TYPE_BY_KEY/mountainImages lookup tables the real mountain art
+// uses (under their own "wm"-prefixed keys, so there's no collision with
+// mt1-mt12) rather than building a parallel set of data structures -
+// drawMountains' own image lookup and every piece of collision code that
+// reads mountain stamp data already works purely off whatever key a stamp
+// was given, so merging means neither needs to change at all. Only
+// placeMountainRange's pool selection below needs to be biome-aware, to
+// pick from these keys instead of the normal snowy/bare ones specifically
+// for Wasteland.
+const WASTELAND_MOUNTAIN_TYPES = [{"key": "wm1", "aspectRatio": 1.0558, "snowy": false}, {"key": "wm2", "aspectRatio": 1.0398, "snowy": false}, {"key": "wm3", "aspectRatio": 1.1116, "snowy": false}, {"key": "wm4", "aspectRatio": 0.996, "snowy": false}, {"key": "wm5", "aspectRatio": 1.0115, "snowy": false}, {"key": "wm6", "aspectRatio": 0.9962, "snowy": false}, {"key": "wm7", "aspectRatio": 1.0649, "snowy": false}, {"key": "wm8", "aspectRatio": 0.9542, "snowy": false}, {"key": "wm9", "aspectRatio": 1.0729, "snowy": false}, {"key": "wm10", "aspectRatio": 1.0966, "snowy": false}, {"key": "wm11", "aspectRatio": 1.1215, "snowy": false}, {"key": "wm12", "aspectRatio": 1.0121, "snowy": false}];
+const WASTELAND_MOUNTAIN_DATA_URIS = {"wm1": "assets/terrain/wasteland_mountains/wmtn_01.png", "wm2": "assets/terrain/wasteland_mountains/wmtn_02.png", "wm3": "assets/terrain/wasteland_mountains/wmtn_03.png", "wm4": "assets/terrain/wasteland_mountains/wmtn_04.png", "wm5": "assets/terrain/wasteland_mountains/wmtn_05.png", "wm6": "assets/terrain/wasteland_mountains/wmtn_06.png", "wm7": "assets/terrain/wasteland_mountains/wmtn_07.png", "wm8": "assets/terrain/wasteland_mountains/wmtn_08.png", "wm9": "assets/terrain/wasteland_mountains/wmtn_09.png", "wm10": "assets/terrain/wasteland_mountains/wmtn_10.png", "wm11": "assets/terrain/wasteland_mountains/wmtn_11.png", "wm12": "assets/terrain/wasteland_mountains/wmtn_12.png"};
+const WASTELAND_MOUNTAIN_KEYS = WASTELAND_MOUNTAIN_TYPES.map(m=>m.key);
 const MOUNTAIN_SNOWY_KEYS = MOUNTAIN_TYPES.filter(m=>m.snowy).map(m=>m.key);
 const MOUNTAIN_BARE_KEYS = MOUNTAIN_TYPES.filter(m=>!m.snowy).map(m=>m.key);
 const MOUNTAIN_TYPE_BY_KEY = {};
 MOUNTAIN_TYPES.forEach(m => { MOUNTAIN_TYPE_BY_KEY[m.key] = m; });
+WASTELAND_MOUNTAIN_TYPES.forEach(m => { MOUNTAIN_TYPE_BY_KEY[m.key] = m; });
 const mountainImages = {};
 const mountainImageReady = {};
 Object.keys(MOUNTAIN_DATA_URIS).forEach(key => {
   const img = new Image();
   img.onload = () => { mountainImageReady[key] = true; };
   img.src = MOUNTAIN_DATA_URIS[key];
+  mountainImages[key] = img;
+});
+Object.keys(WASTELAND_MOUNTAIN_DATA_URIS).forEach(key => {
+  const img = new Image();
+  img.onload = () => { mountainImageReady[key] = true; };
+  img.src = WASTELAND_MOUNTAIN_DATA_URIS[key];
   mountainImages[key] = img;
 });
 
@@ -1435,13 +1457,16 @@ const BIOME_CONFIGS = {
       mountainRock: '#57514a', mountainRockDark: '#3e3a34',
       lakeWater: '#3d6b7a', lakeWaterDark: '#2a4d59', lakeShoreline: '#5c5648', riverWater: '#4a7d8c'
     },
-    // "There are no roads, mountains, lakes or rivers on Wasteland" -
-    // mountains/lakes are zeroed directly (the same way Urban Hell already
-    // zeroes its own mountain count); roads and rivers are both gated by
-    // noRoads below instead, since buildingStyle itself needs to stay truthy
-    // here (see denseScatter) rather than falsy the way Jungle's "no roads"
-    // is expressed.
-    mountainClusterCount: 0, mountainEdgeClusterCount: 0, mountainGapMultiplier: 1,
+    // Mountains are back on, reskinned as rubble/debris piles ("Wasteland
+    // Mountains" - see WASTELAND_MOUNTAIN_TYPES and placeMountainRange's
+    // biome-aware pool selection) at the same frequency as Ice, copied
+    // directly from Ice's own values below. Lakes/roads/rivers stay off -
+    // lakes are zeroed directly (the same way Urban Hell already zeroes its
+    // own mountain count); roads and rivers are both gated by noRoads below
+    // instead, since buildingStyle itself needs to stay truthy here (see
+    // denseScatter) rather than falsy the way Jungle's "no roads" is
+    // expressed.
+    mountainClusterCount: 9, mountainEdgeClusterCount: 5, mountainGapMultiplier: 1.8,
     lakeInteriorCount: [0,0], lakeEdgeCount: [0,0],
     // Sparse, scattered weeds poking through rubble rather than anything
     // resembling a forest - the supplied ground art already reads as barren,
@@ -3990,7 +4015,7 @@ function genTerrain(seedValue){
   // fresh theme is rolled per range, so different ranges elsewhere on the
   // map can still differ from each other.
   function placeMountainRange(cx, cy, count, gapMultiplier) {
-    const pool = rnd() < 0.5 ? MOUNTAIN_SNOWY_KEYS : MOUNTAIN_BARE_KEYS;
+    const pool = currentBiome === 'wasteland' ? WASTELAND_MOUNTAIN_KEYS : (rnd() < 0.5 ? MOUNTAIN_SNOWY_KEYS : MOUNTAIN_BARE_KEYS);
     let px = cx, py = cy;
     for (let i=0;i<count;i++) {
       const key = pool[Math.floor(rnd()*pool.length)];
