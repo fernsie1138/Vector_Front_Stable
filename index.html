@@ -789,7 +789,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 155;
+const GAME_VERSION = 156;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6604,7 +6604,12 @@ function assignFieldRepair(sapper, target) {
   cancelAnyFieldRepairInvolving(target);
   sapper.repairTargetId = target.id;
   chaseFieldRepairTarget(sapper, target.x, target.y);
-  showToast('Sapper moving to repair target');
+  // No toast here - this is also the function the new automatic proximity
+  // heal (see updateAutomaticFieldRepair) calls directly every time it finds
+  // an eligible target in range, which would otherwise spam a toast
+  // constantly as units simply walk near each other. The one genuinely
+  // player-initiated call site (the manual Heal/Repair build-menu command)
+  // shows its own toast itself instead, right where it calls this.
 }
 
 // Minimal direct movement order for a Sapper's OWN internal pursuit of its
@@ -6625,6 +6630,42 @@ function chaseFieldRepairTarget(t, x, y) {
   t.state = 'moving';
 }
 
+// "Medics heal infantry units automatically if they are within 20 pixels of
+// medic... only one unit can be healed at a time. Sappers heal non-infantry
+// units if they are within 20 pixels of a sapper... only one unit can be
+// healed at a time." Reuses the exact same assignFieldRepair/
+// updateFieldRepairs pipeline the player's own manual Heal/Repair build-menu
+// commands already use - this just adds a second, passive way for that same
+// assignment to happen, triggered by proximity instead of a click. "Only one
+// unit at a time" falls out of the existing architecture for free: a
+// Medic/Sapper only ever holds a single repairTargetId, so a free check here
+// (skipping anyone already assigned) is both necessary and sufficient -
+// nothing further is needed to enforce it. Does not override an existing
+// manual assignment or interrupt a Medic/Sapper that's already busy healing
+// someone; once that finishes (repairTargetId clears itself in
+// updateFieldRepairs), this picks up again on the next eligible target in
+// range automatically.
+const AUTO_HEAL_RANGE = 20;
+function updateAutomaticFieldRepair() {
+  entities.forEach(t => {
+    if (t.kind !== 'tank' || !t.alive) return;
+    if (t.unitType !== 'medic' && t.unitType !== 'sappers') return;
+    if (t.repairTargetId) return; // already healing someone - "only one unit can be healed at a time"
+    if (t.isBuilding || t.beingDemolished) return; // busy with another field action entirely
+    let best = null, bestDist = Infinity;
+    entities.forEach(e => {
+      if (e.kind !== 'tank' || !e.alive || e === t || e.team !== t.team) return;
+      if (e.hp >= e.maxHp || e.beingFieldRepaired) return; // not hurt, or already being healed by someone else
+      const targetIsInfantry = INFANTRY_CLASS_TYPES.has(e.unitType);
+      if (t.unitType === 'medic' && !targetIsInfantry) return; // Medic: Infantry-class only
+      if (t.unitType === 'sappers' && targetIsInfantry) return; // Sappers: non-Infantry only
+      const d = Math.hypot(e.x-t.x, e.y-t.y);
+      if (d > AUTO_HEAL_RANGE) return;
+      if (d < bestDist) { bestDist = d; best = e; }
+    });
+    if (best) assignFieldRepair(t, best);
+  });
+}
 function updateFieldRepairs(dt) {
   // Pass 1: drive every Sapper currently assigned to repair someone.
   entities.forEach(t => {
@@ -7244,6 +7285,7 @@ function handleTap(sx, sy) {
       showToast('That unit is already at full health');
     } else {
       healers.forEach(s => { if (s.alive) assignFieldRepair(s, target); });
+      showToast(isMedicHeal ? 'Medic moving to heal target' : 'Sapper moving to repair target');
     }
     return;
   }
@@ -12679,6 +12721,7 @@ function gameLoop(now) {
     updateSupplyCapture(dt);
     updateProduction(dt);
     updateRepair(dt);
+    updateAutomaticFieldRepair();
     updateFieldRepairs(dt);
     updateDemolitions(dt);
     entities.forEach(e=>{ if (e.kind==='tank') { e.__preMoveX = e.x; e.__preMoveY = e.y; updateTank(e, dt, now); } });
