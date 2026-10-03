@@ -851,7 +851,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 164;
+const GAME_VERSION = 165;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -2997,6 +2997,17 @@ const INFANTRY_CLASS_TYPES = new Set(['infantry','atinfantry','sappers','medic']
 // blocked by a building's footprint in this game to begin with - a flying
 // unit already "flies over" them for free.
 const FLYING_UNIT_TYPES = new Set(['hkunit']);
+// "Only the following units can attack flying units. Every other unit
+// cannot fire at flying units." This is a TARGETING restriction only -
+// ineligible units can still see/detect flying units normally (vision,
+// minimap, etc. are untouched), they simply can never acquire one as an
+// attackTarget, through any path (direct sighting, shared-awareness
+// reacting, the player's manual click-to-attack, or the ATTACK button's
+// "nearest enemy" auto-pick) - see canTargetFlying and its call sites.
+const CAN_TARGET_FLYING_UNIT_TYPES = new Set(['scout', 'autotank', 'infantry', 'apc', 'turret', 'blockhouse', 'mech']);
+function canTargetFlying(attackerUnitType, target) {
+  return !FLYING_UNIT_TYPES.has(target.unitType) || CAN_TARGET_FLYING_UNIT_TYPES.has(attackerUnitType);
+}
 // "It cannot fire on its own, it must be ordered to attack ground" - Heavy
 // Artillery has real damage (unlike Foxhole/Watch Tower/Barricade/
 // Embankment, which the !t.damage check in updateAutoEngage already
@@ -7498,7 +7509,14 @@ function handleTap(sx, sy) {
     } else {
       // enemy tank tapped -> attack with selection
       if (selected.size > 0) {
+        // "Every other unit cannot fire at flying units" - a unit outside
+        // CAN_TARGET_FLYING_UNIT_TYPES simply isn't given this order at all
+        // when the clicked target is flying, left exactly as it was rather
+        // than being sent an attack command it could never actually carry
+        // out. The rest of a mixed selection that IS eligible still attacks
+        // normally.
         selected.forEach(t=>{
+          if (!canTargetFlying(t.unitType, hitTank)) return;
           t.attackTarget = hitTank;
           if (!t.permanentlyDeployed) {
             t.target = null;
@@ -7788,8 +7806,11 @@ document.getElementById('btnAttack').addEventListener('click', ()=>{
     t.holdFire = false;
     if (t.permanentlyDeployed) {
       // a deployed turret can't move to attack, but it can still be aimed at
-      // the nearest enemy it's actually able to reach from where it stands
-      const enemies = getTanks(t.team==='blue'?'red':'blue');
+      // the nearest enemy it's actually able to reach from where it stands -
+      // skipping flying enemies here too if this unit type can't fire on
+      // them, so the "nearest enemy" auto-pick lands on the nearest one it
+      // can actually engage, not just the nearest overall.
+      const enemies = getTanks(t.team==='blue'?'red':'blue').filter(en => canTargetFlying(t.unitType, en));
       let nearest=null, nd=Infinity;
       enemies.forEach(en=>{ const d=Math.hypot(en.x-t.x,en.y-t.y); if(d<nd){nd=d;nearest=en;} });
       if (nearest) t.attackTarget = nearest;
@@ -7797,7 +7818,7 @@ document.getElementById('btnAttack').addEventListener('click', ()=>{
     }
     t.holdEngage = false;
     t.defending = false;
-    const enemies = getTanks(t.team==='blue'?'red':'blue');
+    const enemies = getTanks(t.team==='blue'?'red':'blue').filter(en => canTargetFlying(t.unitType, en));
     let nearest=null, nd=Infinity;
     enemies.forEach(en=>{ const d=Math.hypot(en.x-t.x,en.y-t.y); if(d<nd){nd=d;nearest=en;} });
     if (nearest) { t.attackTarget = nearest; t.target=null; t.path=null; t.state='attacking'; }
@@ -8102,6 +8123,7 @@ function findNearestEnemyInSight(t) {
     if (e.kind!=='tank' && e.kind!=='base') return; // supply depots are indestructible and never attackable
     if (isConcealedFrom(e, t)) return; // Infantry sheltering in a building is invisible to this unit's targeting, unless t is itself Infantry
     if (isStealthConcealedFrom(e, t)) return; // Infantry/Scout that have gone to ground near a tree/building for 5+s are invisible to EVERY enemy type until detected or they act
+    if (!canTargetFlying(t.unitType, e)) return; // "every other unit cannot fire at flying units" - skipped as a candidate entirely, so an ineligible unit looks straight past a flying enemy to whatever else is in range, rather than finding nothing
     const d = Math.hypot(e.x-t.x, e.y-t.y);
     // Artillery/Mortar skip anything inside their minimum range at
     // acquisition time too - otherwise a too-close enemy (being the
@@ -8150,6 +8172,12 @@ function findReactableEnemy(t) {
     if (allyToT > reactRadius) return; // ally too far away to relay awareness
     const spotted = findNearestEnemyInSight(ally);
     if (!spotted) return;
+    // findNearestEnemyInSight's own flying-eligibility check above was
+    // evaluated for the ALLY (whoever actually spotted it), not for t (the
+    // unit that would actually react and engage here) - an eligible ally
+    // spotting a flying enemy doesn't make it something an ineligible t can
+    // suddenly fire on, so this needs its own check against t specifically.
+    if (!canTargetFlying(t.unitType, spotted)) return;
     const d = Math.hypot(spotted.x-t.x, spotted.y-t.y);
     if (d <= reactRadius) {
       const tier = targetPriorityTier(spotted);
