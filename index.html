@@ -585,6 +585,13 @@
       <button class="optionBtn" id="optBiomeWasteland" data-group="biome" data-value="wasteland">WASTELAND</button>
     </div>
   </div>
+  <div class="optionGroup">
+    <div class="optionLabel">Mechs Can Capture Supply Points</div>
+    <div class="optionRow">
+      <button class="optionBtn" id="optMechCaptureOff" data-group="mechCapture" data-value="off">OFF</button>
+      <button class="optionBtn" id="optMechCaptureOn" data-group="mechCapture" data-value="on">ON</button>
+    </div>
+  </div>
   <button class="launchBtn" id="btnUnitOptions" style="margin-top:22px; background:rgba(20,28,24,0.55); color:#f4efe3; border:1px solid rgba(244,239,227,0.4);">UNIT OPTIONS</button>
   <button class="launchBtn" id="btnOptionsConfirm">START GAME</button>
   <button class="launchBtn" id="btnOptionsBack" style="background:rgba(20,28,24,0.55); color:#f4efe3; border:1px solid rgba(244,239,227,0.4);">BACK</button>
@@ -756,6 +763,14 @@ let appState = 'launch';
 //   into raiding instead, and raids start immediately rather than waiting for
 //   defenses to be established.
 let redStrategy = 'defensive';
+// New Game option: "Mechs can capture supply points... this allows the
+// player to play against an enemy with no infantry." Off by default -
+// capture eligibility is normally Infantry-class only (see
+// updateSupplyCapture) - set per-match from the setup screen's toggle, and
+// persisted through save/load since it's an ongoing match rule, not just a
+// one-time setup choice.
+let mechsCanCaptureSupply = false;
+const MECH_CLASS_TYPES = new Set(['mech', 'lrmmech']);
 
 // Home base defense targets: fixed, randomized ONCE per match (see
 // enterPlayMode) rather than recalculated every tick or grown over time -
@@ -792,7 +807,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 158;
+const GAME_VERSION = 159;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6511,9 +6526,15 @@ function updateSupplyCapture(dt) {
     // Only Infantry can capture supply depots - every other unit type can
     // still fight over the ground around a depot, but standing on one with a
     // tank, artillery, etc. does nothing toward flipping its ownership.
-    const bluePresent = entities.some(e=>e.kind==='tank' && e.alive && e.team==='blue' && INFANTRY_CLASS_TYPES.has(e.unitType) &&
+    // Exception: the "Mechs can capture supply points" setup option extends
+    // this same eligibility to Mech/LRM Mech too, when turned on for this
+    // match - "this allows the player to play against an enemy with no
+    // infantry" without that choice locking either side out of capturing
+    // anything at all.
+    const canCapture = e => INFANTRY_CLASS_TYPES.has(e.unitType) || (mechsCanCaptureSupply && MECH_CLASS_TYPES.has(e.unitType));
+    const bluePresent = entities.some(e=>e.kind==='tank' && e.alive && e.team==='blue' && canCapture(e) &&
       Math.hypot(e.x-dep.x, e.y-dep.y) <= dep.captureRadius);
-    const redPresent = entities.some(e=>e.kind==='tank' && e.alive && e.team==='red' && INFANTRY_CLASS_TYPES.has(e.unitType) &&
+    const redPresent = entities.some(e=>e.kind==='tank' && e.alive && e.team==='red' && canCapture(e) &&
       Math.hypot(e.x-dep.x, e.y-dep.y) <= dep.captureRadius);
 
     let contestingTeam = null;
@@ -6882,62 +6903,16 @@ function purchaseTank(team) { return purchaseUnit(team, 'tank'); }
 // spawn already deployed and defending, since a starting garrison should be
 // dug in and functional immediately rather than left as loose undeployed
 // units someone has to remember to manually command into position.
-function spawnStartingRoster(team, base, roster) {
-  const totalUnits = roster.reduce((sum, entry) => sum + entry.count, 0);
-  let placed = 0;
-  roster.forEach(entry => {
-    for (let i=0; i<entry.count; i++) {
-      const ang = (placed / totalUnits) * Math.PI*2;
-      let dist = 110;
-      let x = base.x + Math.cos(ang)*dist;
-      let y = base.y + Math.sin(ang)*dist;
-      // "Units do not spawn on rivers" - structurally this should already
-      // never happen (river generation excludes a much larger radius around
-      // both bases than this formation ring ever reaches, see
-      // riverSpawnClearance), but nudging outward on the same bearing
-      // until clear costs nothing and makes the guarantee hold even if a
-      // river's channel ever comes closer to a base than expected.
-      let guard = 0;
-      while (isPointOnRiver(x, y, 20) && guard < 20) {
-        dist += 20;
-        x = base.x + Math.cos(ang)*dist;
-        y = base.y + Math.sin(ang)*dist;
-        guard++;
-      }
-      // Starting units - including Turret/Blockhouse - spawn undeployed and
-      // not defending, same as anything else placed by DEFEND normally would
-      // start out. A unit spawned already permanentlyDeployed can never be
-      // moved again by any order (issueMoveOrder refuses outright), which
-      // would lock the whole starting garrison into its spawn ring forever -
-      // the player needs to be able to reposition units before committing
-      // them to a defensive spot with their own DEFEND command.
-      const unit = makeTank(team, x, y, entry.unitType);
-      entities.push(unit);
-      placed++;
-    }
-  });
-}
-
-const BLUE_STARTING_ROSTER = [
-  { unitType: 'tank', count: 5 },
-  { unitType: 'infantry', count: 5 },
-  { unitType: 'artillery', count: 2 },
-  { unitType: 'mortar', count: 2 }
-];
-const RED_STARTING_ROSTER = [
-  { unitType: 'infantry', count: 10 },
-  { unitType: 'mortar', count: 5 }
-];
-
-// Sets up a normal match: blue and red each start with a fixed defensive-
-// leaning roster around their own base (see BLUE_STARTING_ROSTER and
-// RED_STARTING_ROSTER above) rather than one-of-everything or a plain tank
-// garrison. Deferred until the player actually presses PLAY on the launch
-// screen, rather than running unconditionally at page load.
+// "From now on, have no starting units. The red team (computer controlled)
+// and the blue team (player controlled) must buy units as the supply grows
+// from the very start." Both sides previously began with a fixed defensive
+// roster already spawned around their base; that's gone entirely now,
+// spawnStartingRoster is simply never called, and both bases start with
+// nothing on the field but their own base structure - the very first unit
+// either side ever has is whatever it purchases once Supply allows it.
+// Deferred until the player actually presses PLAY on the launch screen,
+// rather than running unconditionally at page load.
 function startPlayMode() {
-  spawnStartingRoster('blue', blueBase, BLUE_STARTING_ROSTER);
-  spawnStartingRoster('red', redBase, RED_STARTING_ROSTER);
-
   camera.x = blueBase.x + 300;
   camera.y = blueBase.y - 300;
   camera.zoom = 0.62;
@@ -11744,8 +11719,9 @@ document.getElementById('btnRestart').addEventListener('click', ()=> location.re
 document.getElementById('versionTag').textContent = 'v' + GAME_VERSION;
 document.getElementById('launchVersion').textContent = 'v' + GAME_VERSION;
 
-function enterPlayMode(strategy, mapSize, biome) {
+function enterPlayMode(strategy, mapSize, biome, mechsCanCapture) {
   redStrategy = strategy;
+  mechsCanCaptureSupply = !!mechsCanCapture;
   // Home-defense targets, re-set fresh at the start of every match (done
   // here, at the same point map/team setup happens, rather than only where
   // redHomeDefenseTargets is first declared, since that declaration only
@@ -11961,6 +11937,7 @@ document.getElementById('btnCloseInstructions').addEventListener('click', ()=>{
 let selectedStance = 'aggressive';
 let selectedMapSize = 'medium';
 let selectedBiome = 'desert';
+let selectedMechCapture = 'off';
 function setOptionSelection(group, value) {
   document.querySelectorAll(`.optionBtn[data-group="${group}"]`).forEach(btn=>{
     btn.classList.toggle('selected', btn.dataset.value === value);
@@ -11968,6 +11945,7 @@ function setOptionSelection(group, value) {
   if (group === 'stance') selectedStance = value;
   else if (group === 'size') selectedMapSize = value;
   else if (group === 'biome') selectedBiome = value;
+  else if (group === 'mechCapture') selectedMechCapture = value;
 }
 document.querySelectorAll('.optionBtn').forEach(btn=>{
   btn.addEventListener('click', ()=> setOptionSelection(btn.dataset.group, btn.dataset.value));
@@ -11977,6 +11955,7 @@ document.querySelectorAll('.optionBtn').forEach(btn=>{
 setOptionSelection('stance', selectedStance);
 setOptionSelection('size', selectedMapSize);
 setOptionSelection('biome', selectedBiome);
+setOptionSelection('mechCapture', selectedMechCapture);
 
 document.getElementById('btnOptionsBack').addEventListener('click', ()=>{
   document.getElementById('optionsScreen').style.display = 'none';
@@ -11986,7 +11965,7 @@ document.getElementById('btnOptionsConfirm').addEventListener('click', ()=>{
   document.getElementById('optionsScreen').style.display = 'none';
   // selectedBiome is now genuinely used - see BIOME_CONFIGS/applyBiome for
   // the full per-biome generation differences.
-  enterPlayMode(selectedStance, selectedMapSize, selectedBiome);
+  enterPlayMode(selectedStance, selectedMapSize, selectedBiome, selectedMechCapture === 'on');
 });
 
 // ---------- Unit Options screen ----------
