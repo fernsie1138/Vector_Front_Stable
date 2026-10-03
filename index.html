@@ -592,6 +592,13 @@
       <button class="optionBtn" id="optMechCaptureOn" data-group="mechCapture" data-value="on">ON</button>
     </div>
   </div>
+  <div class="optionGroup">
+    <div class="optionLabel">All Neutral Supply Points Start Red</div>
+    <div class="optionRow">
+      <button class="optionBtn" id="optNeutralStartRedOff" data-group="neutralStartRed" data-value="off">OFF</button>
+      <button class="optionBtn" id="optNeutralStartRedOn" data-group="neutralStartRed" data-value="on">ON</button>
+    </div>
+  </div>
   <button class="launchBtn" id="btnUnitOptions" style="margin-top:22px; background:rgba(20,28,24,0.55); color:#f4efe3; border:1px solid rgba(244,239,227,0.4);">UNIT OPTIONS</button>
   <button class="launchBtn" id="btnOptionsConfirm">START GAME</button>
   <button class="launchBtn" id="btnOptionsBack" style="background:rgba(20,28,24,0.55); color:#f4efe3; border:1px solid rgba(244,239,227,0.4);">BACK</button>
@@ -771,6 +778,14 @@ let redStrategy = 'defensive';
 // one-time setup choice.
 let mechsCanCaptureSupply = false;
 const MECH_CLASS_TYPES = new Set(['mech', 'lrmmech']);
+// New Game option: "All neutral supply points start Red... red has a supply
+// advantage at the start of the game and blue has to try and capture its
+// way back." Off by default (depots start genuinely neutral, as before) -
+// set per-match from the setup screen's toggle, read once at map generation
+// time by placeNeutralSupplyDepots/placeExtraRandomSupplyDepots (every
+// depot those two functions would otherwise create with team: null is
+// created red-owned instead).
+let neutralDepotsStartRed = false;
 
 // Home base defense targets: fixed, randomized ONCE per match (see
 // enterPlayMode) rather than recalculated every tick or grown over time -
@@ -807,7 +822,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 159;
+const GAME_VERSION = 160;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6328,7 +6343,9 @@ placeSupplyBuildings('red', redBase);
 // the two bases), spaced out and nudged off any mountains, with both their
 // position along the midline and their perpendicular offset randomized each
 // game so the layout isn't identical every match. Team is null until captured
-// by either side.
+// by either side - unless the "All neutral supply points start Red" setup
+// option is on, in which case every depot this function would otherwise
+// create neutral starts red-owned instead (see neutralDepotsStartRed).
 function placeNeutralSupplyDepots() {
   const midX = WORLD.w/2, midY = WORLD.h/2;
   // spread 3 points across the map's midline, roughly perpendicular to the
@@ -6351,7 +6368,7 @@ function placeNeutralSupplyDepots() {
     while (isMountain(x,y) && tries<20) {
       x += 20; y += 15; tries++;
     }
-    entities.push(makeSupply(null, x, y));
+    entities.push(makeSupply(neutralDepotsStartRed ? 'red' : null, x, y));
   });
 }
 placeNeutralSupplyDepots();
@@ -6370,7 +6387,7 @@ function placeExtraRandomSupplyDepots(count) {
       clear = !isMountain(x,y) && existing().every(e => Math.hypot(e.x-x, e.y-y) > 220);
       tries++;
     } while (!clear && tries < 60);
-    entities.push(makeSupply(null, x, y));
+    entities.push(makeSupply(neutralDepotsStartRed ? 'red' : null, x, y));
   }
 }
 placeExtraRandomSupplyDepots(3);
@@ -6695,7 +6712,17 @@ function chaseFieldRepairTarget(t, x, y) {
 // someone; once that finishes (repairTargetId clears itself in
 // updateFieldRepairs), this picks up again on the next eligible target in
 // range automatically.
-const AUTO_HEAL_RANGE = 20;
+// 20 was too tight to ever reliably trigger in real play: unit-vs-unit
+// collision keeps two units' centers apart by at least the SUM of their own
+// collisionRadius values, and several real pairings already meet or exceed
+// 20 just from that alone before any auto-heal range even enters the
+// picture - Medic (10) + Infantry (10) rest at ~20 exactly, and Sapper (10)
+// next to a Tank (15) or Mech (20) rests at 25-30, both already past the old
+// threshold. That made "stand next to the hurt unit" geometrically
+// unreliable or outright impossible for several of the pairings this
+// feature exists for in the first place. 40 comfortably clears every
+// collisionRadius pairing in the game with real margin to spare.
+const AUTO_HEAL_RANGE = 40;
 function updateAutomaticFieldRepair() {
   entities.forEach(t => {
     if (t.kind !== 'tank' || !t.alive) return;
@@ -8395,14 +8422,19 @@ function updateAI(dt) {
   // rather than something a small peel-off squad should solo. Only units not
   // already assigned to capture duty are considered so the same unit isn't
   // re-ordered every tick. Only Infantry can actually capture a depot (see
-  // updateSupplyCapture), so that's the only unit type sent on this duty now -
-  // sending anything else would just walk it there to accomplish nothing.
+  // updateSupplyCapture), so that's normally the only unit type sent on this
+  // duty - sending anything else would just walk it there to accomplish
+  // nothing. The "Mechs can capture supply points" setup option changes that
+  // capture eligibility itself (see updateSupplyCapture/MECH_CLASS_TYPES),
+  // so when it's on, Mech/LRM Mech are real capturers too and get peeled off
+  // for this duty "the same way infantry do" rather than being left to only
+  // ever fight as escorts or front-line combat units.
   const capturableDepots = entities.filter(e => {
     if (e.kind!=='supply' || !e.alive || e.team==='red') return false;
     if (e.team==='blue' && Math.hypot(e.x-blueBase.x, e.y-blueBase.y) <= RALLY_RADIUS) return false; // exclude blue's home depots from routine capture
     return true;
   });
-  const captureCandidates = free.filter(t => INFANTRY_CLASS_TYPES.has(t.unitType));
+  const captureCandidates = free.filter(t => INFANTRY_CLASS_TYPES.has(t.unitType) || (mechsCanCaptureSupply && MECH_CLASS_TYPES.has(t.unitType)));
 
   // Release any stale capture assignment first (unit arrived and its depot is
   // now red-owned, the depot no longer exists, or nothing is capturable at all
@@ -8452,7 +8484,7 @@ function updateAI(dt) {
   // free pool (not already busy) and matched one-to-one against whichever
   // active capturer currently has the fewest escorts, so support spreads
   // across all ongoing captures rather than piling entirely onto one.
-  const activeCapturers = redTanks.filter(t => INFANTRY_CLASS_TYPES.has(t.unitType) && t.captureAssignment);
+  const activeCapturers = redTanks.filter(t => (INFANTRY_CLASS_TYPES.has(t.unitType) || (mechsCanCaptureSupply && MECH_CLASS_TYPES.has(t.unitType))) && t.captureAssignment);
   if (activeCapturers.length > 0) {
     const escortCandidates = free.filter(t => (t.unitType==='tank' || t.unitType==='artillery' || t.unitType==='mech' || t.unitType==='assaulttank') && !t.escortAssignment);
     escortCandidates.forEach(t=>{
@@ -11719,9 +11751,13 @@ document.getElementById('btnRestart').addEventListener('click', ()=> location.re
 document.getElementById('versionTag').textContent = 'v' + GAME_VERSION;
 document.getElementById('launchVersion').textContent = 'v' + GAME_VERSION;
 
-function enterPlayMode(strategy, mapSize, biome, mechsCanCapture) {
+function enterPlayMode(strategy, mapSize, biome, mechsCanCapture, neutralStartRed) {
   redStrategy = strategy;
   mechsCanCaptureSupply = !!mechsCanCapture;
+  // Must be set before generateNewMap runs below - that's what actually
+  // calls placeNeutralSupplyDepots/placeExtraRandomSupplyDepots, which read
+  // this flag at the moment each depot is created.
+  neutralDepotsStartRed = !!neutralStartRed;
   // Home-defense targets, re-set fresh at the start of every match (done
   // here, at the same point map/team setup happens, rather than only where
   // redHomeDefenseTargets is first declared, since that declaration only
@@ -11938,6 +11974,7 @@ let selectedStance = 'aggressive';
 let selectedMapSize = 'medium';
 let selectedBiome = 'desert';
 let selectedMechCapture = 'off';
+let selectedNeutralStartRed = 'off';
 function setOptionSelection(group, value) {
   document.querySelectorAll(`.optionBtn[data-group="${group}"]`).forEach(btn=>{
     btn.classList.toggle('selected', btn.dataset.value === value);
@@ -11946,6 +11983,7 @@ function setOptionSelection(group, value) {
   else if (group === 'size') selectedMapSize = value;
   else if (group === 'biome') selectedBiome = value;
   else if (group === 'mechCapture') selectedMechCapture = value;
+  else if (group === 'neutralStartRed') selectedNeutralStartRed = value;
 }
 document.querySelectorAll('.optionBtn').forEach(btn=>{
   btn.addEventListener('click', ()=> setOptionSelection(btn.dataset.group, btn.dataset.value));
@@ -11956,6 +11994,7 @@ setOptionSelection('stance', selectedStance);
 setOptionSelection('size', selectedMapSize);
 setOptionSelection('biome', selectedBiome);
 setOptionSelection('mechCapture', selectedMechCapture);
+setOptionSelection('neutralStartRed', selectedNeutralStartRed);
 
 document.getElementById('btnOptionsBack').addEventListener('click', ()=>{
   document.getElementById('optionsScreen').style.display = 'none';
@@ -11965,7 +12004,7 @@ document.getElementById('btnOptionsConfirm').addEventListener('click', ()=>{
   document.getElementById('optionsScreen').style.display = 'none';
   // selectedBiome is now genuinely used - see BIOME_CONFIGS/applyBiome for
   // the full per-biome generation differences.
-  enterPlayMode(selectedStance, selectedMapSize, selectedBiome, selectedMechCapture === 'on');
+  enterPlayMode(selectedStance, selectedMapSize, selectedBiome, selectedMechCapture === 'on', selectedNeutralStartRed === 'on');
 });
 
 // ---------- Unit Options screen ----------
