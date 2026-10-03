@@ -849,7 +849,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 161;
+const GAME_VERSION = 162;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -4516,10 +4516,45 @@ function riverSlowdownAt(x, y) {
 // right now" - every movement call site in updateTank/moveAlongPath calls
 // this instead of reading t.speed directly, so the river-crossing penalty
 // (1/3 speed while inside a river's width) is applied consistently
-// everywhere movement happens, rather than needing to patch each of the
-// half-dozen separate `t.x += Math.cos(ang)*t.speed*dt` call sites
-// individually and risk missing one.
+// everywhere movement happens. All of those call sites are themselves now
+// consolidated into the one applyMovementStep function just below, rather
+// than each repeating its own `t.x += Math.cos(ang)*speed*dt` - see there
+// for the vehicle-vs-infantry movement model split.
 const RIVER_SPEED_FACTOR = 1/3;
+// Vehicles drive like real vehicles: they move FORWARD along whatever
+// direction they're currently facing, and rotate to face a new direction
+// when they need one, rather than ever moving in a direction unrelated to
+// their own facing - "I don't want them to float sideways or drift... move
+// only forwards or backwards and then rotate when they need to change
+// direction... But they cannot slip sideways." That's the one guarantee
+// this function exists to make airtight: t.angle and the unit's actual
+// direction of travel are now always the SAME value, every tick, for every
+// unit, by construction - there is no longer any way for a call site to set
+// one without the other. The previous version of this also capped how fast
+// a vehicle could rotate per tick, to visibly arc through a turn ("steering
+// in a circle") rather than snap instantly - that was removed after testing
+// surfaced a real, reproducible stall: in any scene where several vehicles
+// are jostling each other (resolveUnitCollisions shifts a unit's position
+// every tick independent of its facing), the target bearing recalculated
+// each tick can shift faster than a rate-capped turn can ever catch up to,
+// and the unit's heading can end up chasing a moving goal indefinitely
+// without ever converging - observed directly as vehicles freezing in
+// place, facing entirely away from their own destination. Resolving that
+// properly needs real path-planning smoothing (lookahead, hysteresis on the
+// target bearing), which is out of scope here; an uncapped turn keeps the
+// hard guarantee (no sideways slip) without that failure mode, and still
+// visibly curves through any path with more than one waypoint, since the
+// facing is recalculated fresh toward each new segment in turn.
+//
+// Infantry-class units are unaffected either way - "Infantry can still move
+// in any direction" - they already pass their own movement angle in here
+// as both facing and heading, so this one shared function covers both unit
+// families correctly without a special case.
+function applyMovementStep(t, desiredAngle, dt, speed) {
+  t.angle = desiredAngle;
+  t.x += Math.cos(desiredAngle) * speed * dt;
+  t.y += Math.sin(desiredAngle) * speed * dt;
+}
 function effectiveSpeed(t) {
   if (riverSlowdownAt(t.x, t.y)) return t.speed * RIVER_SPEED_FACTOR;
   return t.speed;
@@ -9517,12 +9552,10 @@ function moveAlongPath(t, dt) {
     return;
   }
   const ang = Math.atan2(wp.y-t.y, wp.x-t.x);
-  t.angle = ang;
   t.turretAngle = ang;
   const oldX=t.x, oldY=t.y;
   const __spd1 = effectiveSpeed(t);
-  t.x += Math.cos(ang)*__spd1*dt;
-  t.y += Math.sin(ang)*__spd1*dt;
+  applyMovementStep(t, ang, dt, __spd1);
   if (isMountain(t.x,t.y)) {
     // waypoint itself turned out to be too close to mountain edge - snap back
     // and drop it. Same empty-check as the arrival case above: dropping the
@@ -9968,23 +10001,30 @@ function updateTank(t, dt, now) {
               moveAlongPath(t, dt);
             } else {
               t.path = null;
-              t.turretAngle = desiredAngle;
-              t.angle = desiredAngle;
               const oldX=t.x, oldY=t.y;
               // Red units closing on a shared target spread out perpendicular
               // to the approach direction (see redFormationOffset, assigned
               // once per unit), so a squad naturally arrives side by side
               // along a firing line rather than stacked single-file on the
-              // same point - the offset nudges the aim point sideways, not
-              // the heading angle itself, so the unit still walks straight.
+              // same point. turretAngle is set to the SAME offset-aim-point
+              // bearing the hull is actually driving toward here, not
+              // straight at the target - every unit in this game is a
+              // BODY_ONLY_UNIT (no separate turret sprite exists to point
+              // independently; see the t.angle = t.turretAngle sync further
+              // down), so the one visible rotation has to pick a single
+              // direction, and while still closing distance (not yet able to
+              // fire at all) the honest answer is the direction it's
+              // actually driving, not a target it can't shoot at yet anyway.
+              // It snaps to face the target for real once in range, in the
+              // canFire branch below, same as it always has.
               const perpAngle = desiredAngle + Math.PI/2;
               const lateral = (t.redFormationOffset||0);
               const aimX = t.attackTarget.x + Math.cos(perpAngle)*lateral;
               const aimY = t.attackTarget.y + Math.sin(perpAngle)*lateral;
               const moveAngle = t.team==='red' ? Math.atan2(aimY-t.y, aimX-t.x) : desiredAngle;
+              t.turretAngle = moveAngle;
               const __spd2 = effectiveSpeed(t);
-              t.x += Math.cos(moveAngle)*__spd2*dt;
-              t.y += Math.sin(moveAngle)*__spd2*dt;
+              applyMovementStep(t, moveAngle, dt, __spd2);
               resolveMountainCollision(t, oldX, oldY);
             }
           }
@@ -10009,8 +10049,18 @@ function updateTank(t, dt, now) {
               resolveGroundAttackAfterFire(t);
             }
           } else {
-            // keep the hull moving toward its current move order (if any)
-            // while the turret independently tracks and fires at the target
+            // Drive the hull toward its current move order (if any) and keep
+            // firing at the attack target along the way - a unit that can
+            // fire while moving never has to choose between advancing and
+            // shooting. The one visible rotation (every unit in this game is
+            // a BODY_ONLY_UNIT; see the t.angle = t.turretAngle sync further
+            // down) follows wherever it's actually driving in that case, not
+            // the target's bearing set above - firing still works exactly
+            // the same either way (resolveGroundAttackAfterFire/
+            // fireProjectile aim using t.attackTarget directly, not the
+            // visual angle), so this costs nothing functionally and is what
+            // actually keeps the body from visually slipping sideways while
+            // its real direction of travel is somewhere else entirely.
             if (t.target) {
               if (t.path && t.path.length) {
                 moveAlongPath(t, dt);
@@ -10019,11 +10069,10 @@ function updateTank(t, dt, now) {
                 if (d2 < 6) { t.target = null; t.holdEngage = false; }
                 else {
                   const moveAngle = Math.atan2(t.target.y-t.y, t.target.x-t.x);
-                  t.angle = moveAngle;
+                  t.turretAngle = moveAngle;
                   const oldX=t.x, oldY=t.y;
                   const __spd3 = effectiveSpeed(t);
-                  t.x += Math.cos(moveAngle)*__spd3*dt;
-                  t.y += Math.sin(moveAngle)*__spd3*dt;
+                  applyMovementStep(t, moveAngle, dt, __spd3);
                   if (resolveMountainCollision(t, oldX, oldY)) {
                     const path = findPath(t.x, t.y, t.target.x, t.target.y);
                     if (path && path.length) t.path = path;
@@ -10097,12 +10146,10 @@ function updateTank(t, dt, now) {
       }
       else {
         const ang = Math.atan2(t.target.y-t.y, t.target.x-t.x);
-        t.angle = ang;
         t.turretAngle = ang;
         const oldX=t.x, oldY=t.y;
         const __spd4 = effectiveSpeed(t);
-        t.x += Math.cos(ang)*__spd4*dt;
-        t.y += Math.sin(ang)*__spd4*dt;
+        applyMovementStep(t, ang, dt, __spd4);
         if (resolveMountainCollision(t, oldX, oldY)) {
           // ran into a mountain edge unexpectedly - compute a path around it rather than stopping
           const path = findPath(t.x, t.y, t.target.x, t.target.y);
