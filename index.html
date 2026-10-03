@@ -824,13 +824,14 @@ let neutralDepotsStartRed = false;
 // match start, so the AI has one stable, well-defined goal for the whole
 // match rather than a moving target.
 let redHomeDefenseTargets = {
-  // Capped so the five types together never exceed 15 total - "the red team
-  // will use no more than 15 units to surround its base... it will send
-  // most of its units out to find and fight the blue team" - replacing the
-  // previous 19-unit ceiling (5+5+3+3+3), which let the home garrison alone
-  // exceed the new limit before a single fighting unit was even considered.
-  foxhole: 4, barricade: 4,
-  turret: 3, siegemortar: 2, blockhouse: 2 // up to these EACH, independently - not a shared pool between the three
+  // Capped so the five types together never exceed 6 total - "they need to
+  // keep only minimal forces at their home base, and send out the majority
+  // of their units in attack groups of 10 to 20 units" - cut roughly in
+  // half again from the previous 15-unit ceiling (4+4+3+2+2), which was
+  // already a reduction from an even larger original cap but still left a
+  // home garrison that could rival a full raid's own size.
+  foxhole: 2, barricade: 1,
+  turret: 1, siegemortar: 1, blockhouse: 1 // up to these EACH, independently - not a shared pool between the three
 };
 
 // Testing/debug toggle: when true, isVisible/isExplored report everything as
@@ -849,7 +850,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 162;
+const GAME_VERSION = 163;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -9125,27 +9126,26 @@ function updateAI(dt) {
     // currently has on hand rather than waiting for a full-sized pool to
     // accumulate first - prioritizing constant pressure over efficiency.
     const isAggressive = redStrategy === 'aggressive';
-    const baseSize = currentRallyMin();
-    // redPosture (see its own declaration/timer above) now genuinely drives
-    // wave pacing - "the red team will attack in waves; it will build up
-    // its forces and periodically advance" - rather than toggling a value
-    // nothing ever read. During 'defend' red is choosier about actually
-    // launching (raises the bar so units keep accumulating instead of
-    // trickling out piecemeal); during 'attack' it launches right at the
-    // normal target size and is likelier to mass a genuinely large wave.
-    // Aggressive strategy is unaffected either way - it already ignores
-    // posture and pushes constantly by design.
+    // redPosture (see its own declaration/timer above) still drives wave
+    // pacing - "the red team will attack in waves; it will build up its
+    // forces and periodically advance" - by raising how large a pool has to
+    // be gathered before actually launching (see minPoolToLaunch below)
+    // during 'defend', versus pressing right at the normal target size
+    // during 'attack'. Aggressive strategy is unaffected either way - it
+    // already ignores posture and pushes constantly by design.
     const posturePressing = isAggressive || redPosture === 'attack';
-    const massedRaid = Math.random() < (redPosture === 'attack' ? 0.28 : 0.08);
-    // "They will group their forces into groups of between 10 and 20 before
-    // attacking the blue team." - a hard, fixed range for aggressive,
-    // replacing the normal escalating-over-time/occasional-much-larger-wave
-    // formula entirely (that formula stays exactly as before for defensive -
-    // see the massedRaid roll just above, which no longer even considers
-    // aggressive mode).
-    const raidTarget = isAggressive
-      ? 10 + Math.floor(Math.random()*11)
-      : Math.max(5, massedRaid ? (20 + Math.floor(Math.random()*11)) : baseSize);
+    // "Keep only minimal forces at home base, and send out the majority of
+    // their units in attack groups of 10 to 20 units to attack the blue
+    // team in force." This is now the universal raid size for BOTH
+    // strategies, not just aggressive - defensive no longer ramps up from a
+    // tiny early-game raid size (previously as small as 5, taking several
+    // real minutes to even reach 10) or occasionally dumps an entire
+    // oversized pool via the old massedRaid roll. Every raid, from either
+    // strategy, targets the same 10-20 range; see takeWholePool further
+    // below for the one deliberate exception (draining a genuine idle
+    // backlog), which is a safety net against unassigned units piling up
+    // forever, not a normal attack wave.
+    const raidTarget = 10 + Math.floor(Math.random()*11);
 
     const raidCandidates = rallied.filter(t => t.unitType==='tank' || t.unitType==='autotank' || t.unitType==='scout' || t.unitType==='mech' || t.unitType==='assaulttank' || t.unitType==='lrmmech');
     // Infantry is included too, but only once a raid is actually large enough
@@ -9239,14 +9239,14 @@ function updateAI(dt) {
       // If this launch was triggered by a large idle backlog specifically,
       // commit the entire available pool rather than the normal
       // raidTarget-sized slice, so the backlog actually gets drained instead
-      // of shrinking by only a few units while the rest keep piling up.
-      // Aggressive mode never takes the "whole pool" massedRaid branch below
-      // regardless of backlog/massedRaid, since "groups of between 10 and
-      // 20" is a hard range for it, not just a floor - only defensive mode's
-      // occasional big wave (and true backlog-draining, for either strategy)
-      // ever exceeds raidTarget's own cap.
+      // of shrinking by only a few units while the rest keep piling up. This
+      // is the one deliberate exception to "groups of 10 to 20" - a genuine
+      // overflow safety net against unassigned units accumulating forever,
+      // not a normal attack wave - and even then only for defensive mode;
+      // aggressive mode's own stall-recovery path (the stalled check above)
+      // already widens who's eligible without ever exceeding raidTarget.
       const drainingBacklog = stalled && genuinelyIdle.length >= IDLE_BACKLOG_THRESHOLD;
-      const takeWholePool = !isAggressive && (drainingBacklog || massedRaid);
+      const takeWholePool = !isAggressive && drainingBacklog;
       const raidForce = effectiveRaidPool.slice(0, takeWholePool ? effectiveRaidPool.length : Math.min(effectiveRaidPool.length, raidTarget));
       const target = pickRaidTarget();
       if (target) {
@@ -11835,13 +11835,12 @@ function enterPlayMode(strategy, mapSize, biome, mechsCanCapture, neutralStartRe
   // Home-defense targets, re-set fresh at the start of every match (done
   // here, at the same point map/team setup happens, rather than only where
   // redHomeDefenseTargets is first declared, since that declaration only
-  // needs to run once when the script loads). Capped at 15 total across all
-  // five types - "the red team will use no more than 15 units to surround
-  // its base" - see the comment on the top-level declaration for the exact
-  // breakdown.
+  // needs to run once when the script loads). Capped at 6 total across all
+  // five types - "keep only minimal forces at their home base" - see the
+  // comment on the top-level declaration for the exact breakdown.
   redHomeDefenseTargets = {
-    foxhole: 4, barricade: 4,
-    turret: 3, siegemortar: 2, blockhouse: 2
+    foxhole: 2, barricade: 1,
+    turret: 1, siegemortar: 1, blockhouse: 1
   };
   appState = 'play';
   document.getElementById('launchScreen').style.display = 'none';
