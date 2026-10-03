@@ -328,6 +328,13 @@
   }
   .unitOptionsColHeader.blueHeader { background: rgba(79,176,255,0.3); color: #eaf6ff; }
   .unitOptionsColHeader.redHeader { background: rgba(255,92,77,0.3); color: #ffece8; }
+  .unitPresetSelect {
+    display: block; width: 100%; margin-top: 8px;
+    background: rgba(20,28,24,0.55); color: #f4efe3;
+    border: 1px solid rgba(244,239,227,0.4); border-radius: 8px;
+    padding: 9px 8px; font-size: 13px; font-weight: 600; letter-spacing: 0.02em;
+  }
+  .unitPresetSelect option { background: #3a3428; color: #f4efe3; }
   .unitOptionsList {
     background: rgba(20,28,24,0.28); border-radius: 0 0 10px 10px;
     padding: 4px 0;
@@ -612,6 +619,26 @@
     <p id="unitOptionsSubtext">Uncheck a unit to make it unavailable to that team for this game - it can't be purchased by the player, and the computer won't build it either. Checked units are available as normal.</p>
     <div class="unitOptionsColumns">
       <div class="unitOptionsCol">
+        <div class="unitOptionsColHeader blueHeader">BLUE PRESET</div>
+        <select class="unitPresetSelect" id="unitPresetBlue" data-team="blue">
+          <option value="">-- Select Preset --</option>
+          <option value="guerrillas">Guerrillas</option>
+          <option value="aiMachines">A.I. Machines</option>
+          <option value="allUnits">All Units</option>
+        </select>
+      </div>
+      <div class="unitOptionsCol">
+        <div class="unitOptionsColHeader redHeader">RED PRESET</div>
+        <select class="unitPresetSelect" id="unitPresetRed" data-team="red">
+          <option value="">-- Select Preset --</option>
+          <option value="guerrillas">Guerrillas</option>
+          <option value="aiMachines">A.I. Machines</option>
+          <option value="allUnits">All Units</option>
+        </select>
+      </div>
+    </div>
+    <div class="unitOptionsColumns">
+      <div class="unitOptionsCol">
         <div class="unitOptionsColHeader blueHeader">BLUE (PLAYER)</div>
         <div class="unitOptionsList" id="unitOptionsBlueList"></div>
       </div>
@@ -704,9 +731,9 @@
       <div class="cmdBtn disabled" id="btnBuyATInfantry">AT INF<br><span id="buyATInfantryCost">40</span></div>
       <div class="cmdBtn disabled" id="btnBuySappers">SAPPERS<br><span id="buySappersCost">40</span></div>
       <div class="cmdBtn disabled" id="btnBuyMedic">MEDIC<br><span id="buyMedicCost">30</span></div>
-      <div class="cmdBtn disabled" id="btnBuyTechnicalMG">TECH MG<br><span id="buyTechnicalMGCost">20</span></div>
-      <div class="cmdBtn disabled" id="btnBuyTechnicalAT">TECH AT<br><span id="buyTechnicalATCost">20</span></div>
-      <div class="cmdBtn disabled" id="btnBuyTechnicalMortar">TECH MTR<br><span id="buyTechnicalMortarCost">20</span></div>
+      <div class="cmdBtn disabled" id="btnBuyTechnicalMG">TECH MG<br><span id="buyTechnicalMGCost">40</span></div>
+      <div class="cmdBtn disabled" id="btnBuyTechnicalAT">TECH AT<br><span id="buyTechnicalATCost">40</span></div>
+      <div class="cmdBtn disabled" id="btnBuyTechnicalMortar">TECH MTR<br><span id="buyTechnicalMortarCost">40</span></div>
     </div>
   </div>
 </div>
@@ -822,7 +849,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 160;
+const GAME_VERSION = 161;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -2900,18 +2927,18 @@ const UNIT_STATS = {
   // isTouchingTreeOrBuilding's Technical-specific exclusion of buildings/
   // Blockhouse/Foxhole from that same concealment.
   technicalmg: {
-    cost: 20, hp: 40, armor: 0, damage: 7, fireCooldown: 0.2,
-    range: 100, sight: 240, react: 300, speed: 70, shellSpeed: 1500,
+    cost: 40, hp: 40, armor: 0, damage: 7, fireCooldown: 0.2,
+    range: 100, sight: 240, react: 300, speed: 55, shellSpeed: 1500,
     blastRadius: 0, setupTime: 0, canFireWhileMoving: true, collisionRadius: 15
   },
   technicalat: {
-    cost: 20, hp: 40, armor: 0, damage: 35, fireCooldown: 2.5,
-    range: 200, sight: 240, react: 300, speed: 70, shellSpeed: 1050,
+    cost: 40, hp: 40, armor: 0, damage: 35, fireCooldown: 2.5,
+    range: 200, sight: 240, react: 300, speed: 55, shellSpeed: 1050,
     blastRadius: 0, setupTime: 0, canFireWhileMoving: true, collisionRadius: 15
   },
   technicalmortar: {
-    cost: 20, hp: 40, armor: 0, damage: 25, fireCooldown: 3,
-    range: 420, sight: 460, react: 300, speed: 70, shellSpeed: 175,
+    cost: 40, hp: 40, armor: 0, damage: 25, fireCooldown: 3,
+    range: 420, sight: 460, react: 300, speed: 55, shellSpeed: 175,
     blastRadius: 30, setupTime: 0, canFireWhileMoving: true, collisionRadius: 15,
     minRange: 150
   }
@@ -12018,6 +12045,23 @@ document.getElementById('btnOptionsConfirm').addEventListener('click', ()=>{
 // purchasable types, the build-completion check in updateTank and
 // buildBuildMenu's own hiding gate it for field-built structures),
 // including mid-game if this screen is ever reopened.
+// Unit Presets: picking one from either team's dropdown enables exactly the
+// units listed for it and disables every other unit for that team - a full
+// replacement of that team's current selection, not an addition to it, so
+// "Guerrillas" always means an infantry-and-fortifications-only army and
+// never accidentally leaves some unrelated unit from a previous custom
+// selection still enabled alongside it.
+const UNIT_PRESETS = {
+  guerrillas: ['infantry', 'atinfantry', 'sappers', 'medic', 'foxhole', 'barricade', 'embankment'],
+  aiMachines: ['mech', 'lrmmech', 'blockhouse', 'watchtower', 'siegemortar', 'turret']
+  // 'allUnits' is handled separately below (every type enabled) rather than
+  // listed here, since its membership is simply "all of ALL_SPAWNABLE_TYPES"
+  // and would otherwise need to be kept in sync by hand as new units are added.
+};
+// Checkbox elements, keyed by team then unit type, kept around after
+// buildUnitOptionsScreen creates them once so applyUnitPreset can update
+// their checked state directly afterward without rebuilding the whole list.
+const unitOptionCheckboxes = { blue: {}, red: {} };
 function buildUnitOptionsScreen() {
   const blueList = document.getElementById('unitOptionsBlueList');
   const redList = document.getElementById('unitOptionsRedList');
@@ -12031,6 +12075,7 @@ function buildUnitOptionsScreen() {
       cb.type = 'checkbox';
       cb.checked = unitEnabled[team][type];
       cb.addEventListener('change', () => { unitEnabled[team][type] = cb.checked; });
+      unitOptionCheckboxes[team][type] = cb;
       row.appendChild(cb);
       const span = document.createElement('span');
       span.textContent = label;
@@ -12039,6 +12084,25 @@ function buildUnitOptionsScreen() {
     });
   });
 }
+// Applies a preset to one team: sets unitEnabled for every spawnable type
+// (true for the preset's own units, false for everything else - 'allUnits'
+// is the one case where that's true for everything) and syncs each already-
+// built checkbox to match, so the visible list updates immediately without
+// needing to reopen the screen.
+function applyUnitPreset(team, presetKey) {
+  if (!presetKey) return; // the placeholder "-- Select Preset --" option: no-op
+  const preset = presetKey === 'allUnits' ? ALL_SPAWNABLE_TYPES : (UNIT_PRESETS[presetKey] || []);
+  const presetSet = new Set(preset);
+  ALL_SPAWNABLE_TYPES.forEach(type => {
+    const enabled = presetSet.has(type);
+    unitEnabled[team][type] = enabled;
+    const cb = unitOptionCheckboxes[team][type];
+    if (cb) cb.checked = enabled;
+  });
+}
+document.querySelectorAll('.unitPresetSelect').forEach(sel => {
+  sel.addEventListener('change', () => applyUnitPreset(sel.dataset.team, sel.value));
+});
 document.getElementById('btnUnitOptions').addEventListener('click', ()=>{
   buildUnitOptionsScreen();
   document.getElementById('optionsScreen').style.display = 'none';
