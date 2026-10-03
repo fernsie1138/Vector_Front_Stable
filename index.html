@@ -734,6 +734,7 @@
       <div class="cmdBtn disabled" id="btnBuyTechnicalMG">TECH MG<br><span id="buyTechnicalMGCost">40</span></div>
       <div class="cmdBtn disabled" id="btnBuyTechnicalAT">TECH AT<br><span id="buyTechnicalATCost">40</span></div>
       <div class="cmdBtn disabled" id="btnBuyTechnicalMortar">TECH MTR<br><span id="buyTechnicalMortarCost">40</span></div>
+      <div class="cmdBtn disabled" id="btnBuyHKUnit">HK UNIT<br><span id="buyHKUnitCost">60</span></div>
     </div>
   </div>
 </div>
@@ -850,7 +851,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 163;
+const GAME_VERSION = 164;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -880,14 +881,14 @@ const ROAD_TILE_DATA_URIS = {"road_straight": "assets/terrain/roads/road_straigh
 
 const CRATER_SPRITE_DATA_URIS = {"crater1": "assets/terrain/craters/crater1.png", "crater2": "assets/terrain/craters/crater2.png", "crater3": "assets/terrain/craters/crater3.png", "crater4": "assets/terrain/craters/crater4.png", "crater5": "assets/terrain/craters/crater5.png", "crater6": "assets/terrain/craters/crater6.png"};
 
-const SPRITE_DATA_URIS = {"body_atinfantry": "assets/units/body/body_atinfantry.png", "wreck_atinfantry": "assets/units/body/wreck_atinfantry.png", "body_sappers": "assets/units/body/body_sappers.png", "wreck_sappers": "assets/units/body/wreck_sappers.png", "body_siegemortar": "assets/units/body/body_siegemortar.png", "wreck_siegemortar": "assets/units/body/wreck_siegemortar.png", "body_barricade": "assets/units/body/body_barricade.png", "wreck_barricade": "assets/units/body/wreck_barricade.png", "body_artillery": "assets/units/body/body_artillery.png", "body_blockhouse": "assets/units/body/body_blockhouse.png", "body_foxhole": "assets/units/body/body_foxhole.png", "body_infantry": "assets/units/body/body_infantry.png", "body_mortar": "assets/units/body/body_mortar.png", "body_apc": "assets/units/body/body_apc.png", "body_assaulttank": "assets/units/body/body_assaulttank.png", "body_autotank": "assets/units/body/body_autotank.png", "body_lrmmech": "assets/units/body/body_lrmmech.png", "body_mech": "assets/units/body/body_mech.png", "body_scout": "assets/units/body/body_scout.png", "body_tank": "assets/units/body/body_tank.png", "body_turret": "assets/units/body/body_turret.png", "body_medic": "assets/units/body/body_medic_v2.png", "body_watchtower": "assets/units/body/body_watchtower.png", "body_heavyartillery": "assets/units/body/body_heavyartillery.png", "body_embankment": "assets/units/body/body_embankment.png", "body_technicalmg": "assets/units/body/body_technicalmg.png", "body_technicalat": "assets/units/body/body_technicalat.png", "body_technicalmortar": "assets/units/body/body_technicalmortar.png"};
+const SPRITE_DATA_URIS = {"body_atinfantry": "assets/units/body/body_atinfantry.png", "wreck_atinfantry": "assets/units/body/wreck_atinfantry.png", "body_sappers": "assets/units/body/body_sappers.png", "wreck_sappers": "assets/units/body/wreck_sappers.png", "body_siegemortar": "assets/units/body/body_siegemortar.png", "wreck_siegemortar": "assets/units/body/wreck_siegemortar.png", "body_barricade": "assets/units/body/body_barricade.png", "wreck_barricade": "assets/units/body/wreck_barricade.png", "body_artillery": "assets/units/body/body_artillery.png", "body_blockhouse": "assets/units/body/body_blockhouse.png", "body_foxhole": "assets/units/body/body_foxhole.png", "body_infantry": "assets/units/body/body_infantry.png", "body_mortar": "assets/units/body/body_mortar.png", "body_apc": "assets/units/body/body_apc.png", "body_assaulttank": "assets/units/body/body_assaulttank.png", "body_autotank": "assets/units/body/body_autotank.png", "body_lrmmech": "assets/units/body/body_lrmmech.png", "body_mech": "assets/units/body/body_mech.png", "body_scout": "assets/units/body/body_scout.png", "body_tank": "assets/units/body/body_tank.png", "body_turret": "assets/units/body/body_turret.png", "body_medic": "assets/units/body/body_medic_v2.png", "body_watchtower": "assets/units/body/body_watchtower.png", "body_heavyartillery": "assets/units/body/body_heavyartillery.png", "body_embankment": "assets/units/body/body_embankment.png", "body_technicalmg": "assets/units/body/body_technicalmg.png", "body_technicalat": "assets/units/body/body_technicalat.png", "body_technicalmortar": "assets/units/body/body_technicalmortar.png", "body_hkunit": "assets/units/body/body_hkunit.png"};
 
 const NEW_BUILDING_SPRITE_DATA_URIS = {"b1_normal": "assets/buildings/standard/b1_normal.png", "b1_slight": "assets/buildings/standard/b1_slight.png", "b1_extensive": "assets/buildings/standard/b1_extensive.png", "b1_destroyed": "assets/buildings/standard/b1_destroyed.png", "b2_normal": "assets/buildings/standard/b2_normal.png", "b2_slight": "assets/buildings/standard/b2_slight.png", "b2_extensive": "assets/buildings/standard/b2_extensive.png", "b2_destroyed": "assets/buildings/standard/b2_destroyed.png", "b3_normal": "assets/buildings/standard/b3_normal.png", "b3_slight": "assets/buildings/standard/b3_slight.png", "b3_extensive": "assets/buildings/standard/b3_extensive.png", "b3_destroyed": "assets/buildings/standard/b3_destroyed.png", "b4_normal": "assets/buildings/standard/b4_normal.png", "b4_slight": "assets/buildings/standard/b4_slight.png", "b4_extensive": "assets/buildings/standard/b4_extensive.png", "b4_destroyed": "assets/buildings/standard/b4_destroyed.png", "b5_normal": "assets/buildings/standard/b5_normal.png", "b5_slight": "assets/buildings/standard/b5_slight.png", "b5_extensive": "assets/buildings/standard/b5_extensive.png", "b5_destroyed": "assets/buildings/standard/b5_destroyed.png", "b6_normal": "assets/buildings/standard/b6_normal.png", "b6_slight": "assets/buildings/standard/b6_slight.png", "b6_extensive": "assets/buildings/standard/b6_extensive.png", "b6_destroyed": "assets/buildings/standard/b6_destroyed.png", "b7_normal": "assets/buildings/standard/b7_normal.png", "b7_slight": "assets/buildings/standard/b7_slight.png", "b7_extensive": "assets/buildings/standard/b7_extensive.png", "b7_destroyed": "assets/buildings/standard/b7_destroyed.png", "b8_normal": "assets/buildings/standard/b8_normal.png", "b8_slight": "assets/buildings/standard/b8_slight.png", "b8_extensive": "assets/buildings/standard/b8_extensive.png", "b8_destroyed": "assets/buildings/standard/b8_destroyed.png", "b9_normal": "assets/buildings/standard/b9_normal.png", "b9_slight": "assets/buildings/standard/b9_slight.png", "b9_extensive": "assets/buildings/standard/b9_extensive.png", "b9_destroyed": "assets/buildings/standard/b9_destroyed.png", "b10_normal": "assets/buildings/standard/b10_normal.png", "b10_slight": "assets/buildings/standard/b10_slight.png", "b10_extensive": "assets/buildings/standard/b10_extensive.png", "b10_destroyed": "assets/buildings/standard/b10_destroyed.png"};
 
 const BUILDING_SPRITE_DATA_URIS = {"square_normal": "assets/buildings/legacy/square_normal.png", "square_damaged": "assets/buildings/legacy/square_damaged.png", "rectangle_normal": "assets/buildings/legacy/rectangle_normal.png", "rectangle_damaged": "assets/buildings/legacy/rectangle_damaged.png", "L_normal": "assets/buildings/legacy/L_normal.png", "L_damaged": "assets/buildings/legacy/L_damaged.png", "cross_normal": "assets/buildings/legacy/cross_normal.png", "cross_damaged": "assets/buildings/legacy/cross_damaged.png"};
 
 const HULL_TURRET_UNITS = [];
-const BODY_ONLY_UNITS = ['artillery','infantry','mortar','blockhouse','foxhole','tank','scout','autotank','turret','assaulttank','apc','mech','lrmmech','atinfantry','sappers','siegemortar','barricade','medic','watchtower','heavyartillery','embankment','technicalmg','technicalat','technicalmortar'];
+const BODY_ONLY_UNITS = ['artillery','infantry','mortar','blockhouse','foxhole','tank','scout','autotank','turret','assaulttank','apc','mech','lrmmech','atinfantry','sappers','siegemortar','barricade','medic','watchtower','heavyartillery','embankment','technicalmg','technicalat','technicalmortar','hkunit'];
 
 // Units whose sprite art was drawn facing "up" (toward the top of its own
 // source image) rather than facing "right" - this engine's rotation
@@ -900,7 +901,7 @@ const BODY_ONLY_UNITS = ['artillery','infantry','mortar','blockhouse','foxhole',
 // move/aim direction like everything else, but the two static deployables
 // never turn once placed) so the offset is harmless even though it's rarely
 // visually relevant for them.
-const SPRITE_FACING_UP = new Set(['tank','scout','autotank','assaulttank','turret','artillery','infantry','mortar','blockhouse','foxhole','mech','apc','lrmmech','atinfantry','sappers','siegemortar','barricade','watchtower','heavyartillery','embankment','technicalmg','technicalat','technicalmortar']);
+const SPRITE_FACING_UP = new Set(['tank','scout','autotank','assaulttank','turret','artillery','infantry','mortar','blockhouse','foxhole','mech','apc','lrmmech','atinfantry','sappers','siegemortar','barricade','watchtower','heavyartillery','embankment','technicalmg','technicalat','technicalmortar','hkunit']);
 const SPRITE_ROTATION_OFFSET = Math.PI/2;
 
 // Loaded lazily via the Image() constructor - drawTank checks spritesReady
@@ -1208,7 +1209,7 @@ function drawSpriteAspectFit(img, targetSize) {
 // burning-wreck system (spawnWreck/updateWrecks/drawWrecks below) rather
 // than the live-unit rendering path in drawTank/drawSpriteUnit.
 // ---------------------------------------------------------------------------
-const WRECK_DATA_URIS = {"wreck_apc": "assets/units/wreck/wreck_apc.png", "wreck_artillery": "assets/units/wreck/wreck_artillery.png", "wreck_assaulttank": "assets/units/wreck/wreck_assaulttank.png", "wreck_autotank": "assets/units/wreck/wreck_autotank.png", "wreck_blockhouse": "assets/units/wreck/wreck_blockhouse.png", "wreck_foxhole": "assets/units/wreck/wreck_foxhole.png", "wreck_infantry": "assets/units/wreck/wreck_infantry.png", "wreck_lrmmech": "assets/units/wreck/wreck_lrmmech.png", "wreck_mech": "assets/units/wreck/wreck_mech.png", "wreck_mortar": "assets/units/wreck/wreck_mortar.png", "wreck_scout": "assets/units/wreck/wreck_scout.png", "wreck_tank": "assets/units/wreck/wreck_tank.png", "wreck_turret": "assets/units/wreck/wreck_turret.png", "wreck_atinfantry": "assets/units/wreck/wreck_atinfantry.png", "wreck_sappers": "assets/units/wreck/wreck_sappers.png", "wreck_siegemortar": "assets/units/wreck/wreck_siegemortar.png", "wreck_barricade": "assets/units/wreck/wreck_barricade.png", "wreck_medic": "assets/units/wreck/wreck_medic_v2.png", "wreck_watchtower": "assets/units/wreck/wreck_watchtower.png", "wreck_heavyartillery": "assets/units/wreck/wreck_heavyartillery.png", "wreck_embankment": "assets/units/wreck/wreck_embankment.png", "wreck_technicalmg": "assets/units/wreck/wreck_technicalmg.png", "wreck_technicalat": "assets/units/wreck/wreck_technicalat.png", "wreck_technicalmortar": "assets/units/wreck/wreck_technicalmortar.png"};
+const WRECK_DATA_URIS = {"wreck_apc": "assets/units/wreck/wreck_apc.png", "wreck_artillery": "assets/units/wreck/wreck_artillery.png", "wreck_assaulttank": "assets/units/wreck/wreck_assaulttank.png", "wreck_autotank": "assets/units/wreck/wreck_autotank.png", "wreck_blockhouse": "assets/units/wreck/wreck_blockhouse.png", "wreck_foxhole": "assets/units/wreck/wreck_foxhole.png", "wreck_infantry": "assets/units/wreck/wreck_infantry.png", "wreck_lrmmech": "assets/units/wreck/wreck_lrmmech.png", "wreck_mech": "assets/units/wreck/wreck_mech.png", "wreck_mortar": "assets/units/wreck/wreck_mortar.png", "wreck_scout": "assets/units/wreck/wreck_scout.png", "wreck_tank": "assets/units/wreck/wreck_tank.png", "wreck_turret": "assets/units/wreck/wreck_turret.png", "wreck_atinfantry": "assets/units/wreck/wreck_atinfantry.png", "wreck_sappers": "assets/units/wreck/wreck_sappers.png", "wreck_siegemortar": "assets/units/wreck/wreck_siegemortar.png", "wreck_barricade": "assets/units/wreck/wreck_barricade.png", "wreck_medic": "assets/units/wreck/wreck_medic_v2.png", "wreck_watchtower": "assets/units/wreck/wreck_watchtower.png", "wreck_heavyartillery": "assets/units/wreck/wreck_heavyartillery.png", "wreck_embankment": "assets/units/wreck/wreck_embankment.png", "wreck_technicalmg": "assets/units/wreck/wreck_technicalmg.png", "wreck_technicalat": "assets/units/wreck/wreck_technicalat.png", "wreck_technicalmortar": "assets/units/wreck/wreck_technicalmortar.png", "wreck_hkunit": "assets/units/wreck/wreck_hkunit.png"};
 const wreckSprites = {};
 const wreckSpriteReady = {};
 Object.keys(WRECK_DATA_URIS).forEach(key => {
@@ -2942,6 +2943,18 @@ const UNIT_STATS = {
     range: 420, sight: 460, react: 300, speed: 55, shellSpeed: 175,
     blastRadius: 30, setupTime: 0, canFireWhileMoving: true, collisionRadius: 15,
     minRange: 150
+  },
+  // HK Unit (Hunter-Killer) - the first Flying unit. "Same stats as the
+  // Auto Tank except their cost is 60, their HP is 60 and their speed is
+  // 55" - every other field below is copied directly from autotank's own
+  // entry above, unchanged. The actual flying behavior (ignores mountains/
+  // lakes/crevasses/rivers/trees entirely, never pathfinds around anything)
+  // lives in FLYING_UNIT_TYPES and the handful of places that check it, not
+  // in these stats - this entry is just the numbers.
+  hkunit: {
+    cost: 60, hp: 60, armor: 10, damage: 7, fireCooldown: 0.2,
+    range: 100, sight: 240, react: 456, speed: 55, shellSpeed: 1500,
+    blastRadius: 0, setupTime: 0, canFireWhileMoving: true, collisionRadius: 15
   }
 };
 
@@ -2970,6 +2983,20 @@ const SPLASH_DAMAGE_UNIT_TYPES = new Set(
 // several of its use sites are themselves earlier in the file than that
 // declaration would be.
 const INFANTRY_CLASS_TYPES = new Set(['infantry','atinfantry','sappers','medic']);
+// Flying units: "can move over any terrain - mountains, rivers, buildings,
+// anything. Nothing stops them... Otherwise they behave exactly like other
+// vehicles." They are NOT Infantry-class (still a Vehicle for every other
+// purpose - targeting priority, stealth eligibility, capture eligibility,
+// etc. all read INFANTRY_CLASS_TYPES, which this deliberately isn't part
+// of), and they still physically collide with other UNITS normally
+// (resolveUnitCollisions doesn't check this set at all) - only STATIC
+// terrain stops treating them as solid. See resolveMountainCollision and
+// issueMoveOrder for where this is actually enforced, and
+// TREE_PASSABLE_UNIT_TYPES below for trees specifically. Buildings aren't
+// listed as a bypass anywhere because no unit of any kind is physically
+// blocked by a building's footprint in this game to begin with - a flying
+// unit already "flies over" them for free.
+const FLYING_UNIT_TYPES = new Set(['hkunit']);
 // "It cannot fire on its own, it must be ordered to attack ground" - Heavy
 // Artillery has real damage (unlike Foxhole/Watch Tower/Barricade/
 // Embankment, which the !t.damage check in updateAutoEngage already
@@ -5878,6 +5905,12 @@ function resolveEmbankmentRedirect(x0, y0, target, shooterTeam) {
 }
 // Find nearest non-mountain point to a proposed position (simple push-out), used to stop units at mountain edges
 function resolveMountainCollision(t, oldX, oldY) {
+  // Flying units are never bounced back by terrain - "nothing stops them" -
+  // checked here, in the one function every movement call site already
+  // routes through to ask "did I just walk into something solid", rather
+  // than needing a flying-unit guard duplicated at each of those call sites
+  // individually.
+  if (FLYING_UNIT_TYPES.has(t.unitType)) return false;
   if (isMountain(t.x, t.y)) {
     t.x = oldX; t.y = oldY;
     return true;
@@ -6326,7 +6359,11 @@ function issueMoveOrder(t, x, y, suppressAutoEngage) {
   t.isBuilding = false;
   t.buildProgress = 0;
   t.pendingBuildAfterMove = false;
-  if (!lineBlockedByMountain(t.x, t.y, x, y)) {
+  // Flying units never need a path around anything - there's nothing for
+  // them to route around - so they always take the direct "walk straight
+  // there" branch below regardless of what lineBlockedByMountain would
+  // otherwise say for a ground unit on the same line.
+  if (FLYING_UNIT_TYPES.has(t.unitType) || !lineBlockedByMountain(t.x, t.y, x, y)) {
     t.target = {x,y};
     t.path = null;
   } else {
@@ -6374,7 +6411,7 @@ const SUPPLY_GEN_INTERVAL = 1.0; // seconds per point, per owned depot
 // Unit Options screen or the red AI's purchase pool - the same treatment
 // Watch Tower/Heavy Artillery/Embankment already have as Sapper-only
 // structures with no home-base equivalent.
-const UNIT_COSTS = { tank: UNIT_STATS.tank.cost, artillery: UNIT_STATS.artillery.cost, scout: UNIT_STATS.scout.cost, autotank: UNIT_STATS.autotank.cost, infantry: UNIT_STATS.infantry.cost, mortar: UNIT_STATS.mortar.cost, blockhouse: UNIT_STATS.blockhouse.cost, mech: UNIT_STATS.mech.cost, assaulttank: UNIT_STATS.assaulttank.cost, apc: UNIT_STATS.apc.cost, lrmmech: UNIT_STATS.lrmmech.cost, siegemortar: UNIT_STATS.siegemortar.cost, atinfantry: UNIT_STATS.atinfantry.cost, sappers: UNIT_STATS.sappers.cost, medic: UNIT_STATS.medic.cost, technicalmg: UNIT_STATS.technicalmg.cost, technicalat: UNIT_STATS.technicalat.cost, technicalmortar: UNIT_STATS.technicalmortar.cost };
+const UNIT_COSTS = { tank: UNIT_STATS.tank.cost, artillery: UNIT_STATS.artillery.cost, scout: UNIT_STATS.scout.cost, autotank: UNIT_STATS.autotank.cost, infantry: UNIT_STATS.infantry.cost, mortar: UNIT_STATS.mortar.cost, blockhouse: UNIT_STATS.blockhouse.cost, mech: UNIT_STATS.mech.cost, assaulttank: UNIT_STATS.assaulttank.cost, apc: UNIT_STATS.apc.cost, lrmmech: UNIT_STATS.lrmmech.cost, siegemortar: UNIT_STATS.siegemortar.cost, atinfantry: UNIT_STATS.atinfantry.cost, sappers: UNIT_STATS.sappers.cost, medic: UNIT_STATS.medic.cost, technicalmg: UNIT_STATS.technicalmg.cost, technicalat: UNIT_STATS.technicalat.cost, technicalmortar: UNIT_STATS.technicalmortar.cost, hkunit: UNIT_STATS.hkunit.cost };
 const TANK_COST = UNIT_COSTS.tank; // kept for any existing references
 let supply = { blue: 0, red: 0 };
 
@@ -6749,7 +6786,7 @@ function assignFieldRepair(sapper, target) {
 // somewhere else. This movement IS the repair assignment continuing, not a
 // new order overriding it, so it sets t.target/t.path directly instead.
 function chaseFieldRepairTarget(t, x, y) {
-  if (!lineBlockedByMountain(t.x, t.y, x, y)) {
+  if (FLYING_UNIT_TYPES.has(t.unitType) || !lineBlockedByMountain(t.x, t.y, x, y)) {
     t.target = {x,y};
     t.path = null;
   } else {
@@ -6993,16 +7030,41 @@ function purchaseTank(team) { return purchaseUnit(team, 'tank'); }
 // spawn already deployed and defending, since a starting garrison should be
 // dug in and functional immediately rather than left as loose undeployed
 // units someone has to remember to manually command into position.
-// "From now on, have no starting units. The red team (computer controlled)
-// and the blue team (player controlled) must buy units as the supply grows
-// from the very start." Both sides previously began with a fixed defensive
-// roster already spawned around their base; that's gone entirely now,
-// spawnStartingRoster is simply never called, and both bases start with
-// nothing on the field but their own base structure - the very first unit
-// either side ever has is whatever it purchases once Supply allows it.
-// Deferred until the player actually presses PLAY on the launch screen,
-// rather than running unconditionally at page load.
+// "Change the starting units to 10 infantry on each side." Both sides begin
+// with a ring of 10 Infantry spawned around their own base - no other unit
+// types, same for both teams. Red's own starting Infantry aren't treated
+// any differently at spawn time from a mechanical standpoint; "will try to
+// capture as many supply depots as possible in the initial stages of the
+// game" is satisfied by the existing capture-squad AI (see the
+// captureCandidates/capturableDepots logic in updateAI), which already
+// continuously pulls any free Infantry toward open depots the moment
+// they're available - these 10 simply are red's first free Infantry, so
+// they're exactly what that system picks up and sends out first.
+function spawnStartingInfantryRing(team, base) {
+  const COUNT = 10;
+  for (let i=0; i<COUNT; i++) {
+    const ang = (i / COUNT) * Math.PI*2;
+    let dist = 110;
+    let x = base.x + Math.cos(ang)*dist;
+    let y = base.y + Math.sin(ang)*dist;
+    // Same river-avoidance nudge the old starting roster used - "units do
+    // not spawn on rivers" should hold here just as it does for anything
+    // else placed at match start.
+    let guard = 0;
+    while (isPointOnRiver(x, y, 20) && guard < 20) {
+      dist += 20;
+      x = base.x + Math.cos(ang)*dist;
+      y = base.y + Math.sin(ang)*dist;
+      guard++;
+    }
+    const unit = makeTank(team, x, y, 'infantry');
+    entities.push(unit);
+  }
+}
 function startPlayMode() {
+  spawnStartingInfantryRing('blue', blueBase);
+  spawnStartingInfantryRing('red', redBase);
+
   camera.x = blueBase.x + 300;
   camera.y = blueBase.y - 300;
   camera.zoom = 0.62;
@@ -7812,6 +7874,9 @@ document.getElementById('btnBuyTechnicalAT').addEventListener('click', ()=>{
 document.getElementById('btnBuyTechnicalMortar').addEventListener('click', ()=>{
   purchaseUnit('blue', 'technicalmortar');
 });
+document.getElementById('btnBuyHKUnit').addEventListener('click', ()=>{
+  purchaseUnit('blue', 'hkunit');
+});
 
 // hide hint after a while
 setTimeout(()=>{ const h=document.getElementById('miniHint'); if(h) h.style.opacity='0'; }, 5000);
@@ -8195,7 +8260,8 @@ const BUY_BUTTON_IDS = {
   infantry: 'btnBuyInfantry', mortar: 'btnBuyMortar', blockhouse: 'btnBuyBlockhouse',
   mech: 'btnBuyMech', assaulttank: 'btnBuyAssaultTank', apc: 'btnBuyAPC',
   lrmmech: 'btnBuyLRMMech', siegemortar: 'btnBuySiegeMortar', atinfantry: 'btnBuyATInfantry', sappers: 'btnBuySappers',
-  medic: 'btnBuyMedic', technicalmg: 'btnBuyTechnicalMG', technicalat: 'btnBuyTechnicalAT', technicalmortar: 'btnBuyTechnicalMortar'
+  medic: 'btnBuyMedic', technicalmg: 'btnBuyTechnicalMG', technicalat: 'btnBuyTechnicalAT', technicalmortar: 'btnBuyTechnicalMortar',
+  hkunit: 'btnBuyHKUnit'
 };
 
 const RED_PURCHASE_WEIGHTS = {
@@ -8207,7 +8273,12 @@ const RED_PURCHASE_WEIGHTS = {
   // closest conventional counterpart (autotank/atinfantry/mortar), not given
   // special priority, since nothing in the request calls for the AI to favor
   // them over the equivalent existing unit.
-  technicalmg: 1, technicalat: 2, technicalmortar: 2
+  technicalmg: 1, technicalat: 2, technicalmortar: 2,
+  // HK Unit: a capable, moderately-priced flying unit similar in role to
+  // autotank (same base stats) but immune to terrain - weighted a bit above
+  // autotank's own 1 to reflect that extra versatility, without making it
+  // an overwhelming favorite.
+  hkunit: 2
 };
 // "When the AI Stance is set to aggressive... they will not build barricades
 // or foxholes or defensive structures like turrets, blockhouses or siege
@@ -8246,7 +8317,12 @@ const RED_PURCHASE_WEIGHTS_AGGRESSIVE = {
   // Technicals: fast and cheap fits an aggressive raid's profile reasonably
   // well, weighted near their closest conventional counterparts above
   // (autotank/atinfantry/mortar) rather than left to the generic default.
-  technicalmg: 2, technicalat: 3, technicalmortar: 2
+  technicalmg: 2, technicalat: 3, technicalmortar: 2,
+  // HK Unit: terrain-immune mobility is a genuine asset for a raiding force
+  // (never slowed or routed around mountains/rivers to reach its target),
+  // weighted comparably to autotank/assault tank rather than the generic
+  // default.
+  hkunit: 3
 };
 // Medic is explicitly zeroed here (not just omitted) in both tables above -
 // pickWeightedPurchaseTarget defaults any UNLISTED type to weight 1, which
@@ -9556,7 +9632,7 @@ function moveAlongPath(t, dt) {
   const oldX=t.x, oldY=t.y;
   const __spd1 = effectiveSpeed(t);
   applyMovementStep(t, ang, dt, __spd1);
-  if (isMountain(t.x,t.y)) {
+  if (!FLYING_UNIT_TYPES.has(t.unitType) && isMountain(t.x,t.y)) {
     // waypoint itself turned out to be too close to mountain edge - snap back
     // and drop it. Same empty-check as the arrival case above: dropping the
     // very last waypoint in the list must null out t.path (not just empty
@@ -9600,6 +9676,13 @@ function resolveUnitCollisions() {
       // pass entirely rather than added to CONCEALING_UNIT_TYPES' narrower
       // exemption. It still blocks weapon fire - see lineBlockedBySight.
       if (a.unitType === 'embankment' || b.unitType === 'embankment') continue;
+      // Flying units "can also pass over (or through) other units except for
+      // other flying units" - skipped here whenever exactly one of the pair
+      // is flying (a flying unit passes through any ground unit freely),
+      // but NOT skipped when both are flying, so two flying units still
+      // physically collide with each other normally.
+      const aFlying = FLYING_UNIT_TYPES.has(a.unitType), bFlying = FLYING_UNIT_TYPES.has(b.unitType);
+      if (aFlying !== bFlying) continue;
       const dx = b.x-a.x, dy = b.y-a.y;
       let dist = Math.hypot(dx,dy);
       const minDist = a.radius + b.radius + PAD;
@@ -9992,8 +10075,11 @@ function updateTank(t, dt, now) {
             // Close the distance to get into weapon range, and can fire
             // at any point along the way if a shot happens to line up (handled
             // by the shared fire check below, which doesn't require the unit
-            // to be stationary for units that can fire while moving).
-            if (lineBlockedByMountain(t.x,t.y,t.attackTarget.x,t.attackTarget.y)) {
+            // to be stationary for units that can fire while moving). Flying
+            // units never need to path around terrain to reach their target,
+            // so this check is skipped for them entirely - they always fall
+            // through to the direct-approach branch below.
+            if (!FLYING_UNIT_TYPES.has(t.unitType) && lineBlockedByMountain(t.x,t.y,t.attackTarget.x,t.attackTarget.y)) {
               if (!t.path || !t.path.length || t.aiRepathTimer<=0) {
                 t.path = findPath(t.x, t.y, t.attackTarget.x, t.attackTarget.y);
                 t.aiRepathTimer = 0.8;
@@ -10925,7 +11011,7 @@ function damageBuilding(building, dmg) {
 // included here per request - "no collision with trees and buildings, the
 // same as infantry and scouts" - matching their shared infantry-class
 // membership.
-const TREE_PASSABLE_UNIT_TYPES = new Set([...INFANTRY_CLASS_TYPES, 'scout']);
+const TREE_PASSABLE_UNIT_TYPES = new Set([...INFANTRY_CLASS_TYPES, 'scout', ...FLYING_UNIT_TYPES]);
 // Mech and LRM Mech knock down anything in their path rather than avoiding
 // it or being blocked by it - "they won't try to avoid them, they will walk
 // straight through, destroying them". Kept as its own set (not merged into
@@ -11964,7 +12050,7 @@ const UNIT_DESCRIPTIONS = {
 // Display order for the instructions page - roughly cheapest/most basic
 // units first, working up to the most expensive/specialized, rather than
 // whatever arbitrary order UNIT_STATS' own keys happen to be declared in.
-const UNIT_DISPLAY_ORDER = ['tank','scout','autotank','assaulttank','infantry','atinfantry','sappers','medic','apc','turret','artillery','mortar','blockhouse','watchtower','siegemortar','heavyartillery','foxhole','barricade','embankment','mech','lrmmech','technicalmg','technicalat','technicalmortar'];
+const UNIT_DISPLAY_ORDER = ['tank','scout','autotank','assaulttank','infantry','atinfantry','sappers','medic','apc','turret','artillery','mortar','blockhouse','watchtower','siegemortar','heavyartillery','foxhole','barricade','embankment','mech','lrmmech','technicalmg','technicalat','technicalmortar','hkunit'];
 
 function buildUnitCards() {
   const container = document.getElementById('unitCardsContainer');
@@ -12098,8 +12184,8 @@ document.getElementById('btnOptionsConfirm').addEventListener('click', ()=>{
 // never accidentally leaves some unrelated unit from a previous custom
 // selection still enabled alongside it.
 const UNIT_PRESETS = {
-  guerrillas: ['infantry', 'atinfantry', 'sappers', 'medic', 'foxhole', 'barricade', 'embankment'],
-  aiMachines: ['mech', 'lrmmech', 'blockhouse', 'watchtower', 'siegemortar', 'turret']
+  guerrillas: ['infantry', 'atinfantry', 'sappers', 'medic', 'foxhole', 'barricade', 'embankment', 'technicalmg', 'technicalat', 'technicalmortar'],
+  aiMachines: ['mech', 'lrmmech', 'blockhouse', 'watchtower', 'siegemortar', 'turret', 'hkunit']
   // 'allUnits' is handled separately below (every type enabled) rather than
   // listed here, since its membership is simply "all of ALL_SPAWNABLE_TYPES"
   // and would otherwise need to be kept in sync by hand as new units are added.
@@ -13998,11 +14084,18 @@ function drawSpriteUnit(t, s, r, markerColor) {
   // so it reads as "shadow of the footprint" rather than literally tracing
   // the sprite's own (possibly non-square) silhouette - simpler and reads
   // fine at the small scale these render at.
+  // Flying units get an extra 30px pushed into the same offset direction -
+  // "their drop shadow is offset by 30 pixels to simulate their higher
+  // elevation" - the further a shadow falls from directly under something,
+  // the higher up it reads as floating; everything else about the shadow
+  // (size, softness, fixed non-rotating orientation) is identical to any
+  // other unit's.
+  const flyingShadowOffset = FLYING_UNIT_TYPES.has(unitType) ? 30 : 0;
   ctx.save();
   ctx.globalAlpha = 0.28;
   ctx.fillStyle = '#000000';
   ctx.beginPath();
-  ctx.ellipse(s.x + r*0.12, s.y + r*0.22, r*0.95, r*0.55, 0, 0, Math.PI*2);
+  ctx.ellipse(s.x + r*0.12 + flyingShadowOffset, s.y + r*0.22 + flyingShadowOffset, r*0.95, r*0.55, 0, 0, Math.PI*2);
   ctx.fill();
   ctx.restore();
 
