@@ -824,7 +824,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 166;
+const GAME_VERSION = 167;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -6248,7 +6248,10 @@ function makeTank(team, x, y, unitType) {
     escortSlotFailCount: 0, // consecutive times this escort's spread-out standing slot has failed to yield a valid path, before falling back to just standing at the depot itself
     orderCooldownUntil: 0, // gameElapsed timestamp until which this unit is skipped by AI positioning logic, set after the stuck-detector force-clears its order (see checkAndClearStuckUnits)
     raidTargetId: null, // id of the blue depot/base this unit (red AI) is currently raiding, if any
-    raidRole: null,     // 'vanguard' (combat units clearing the way), 'capture' (infantry waiting to follow up), or 'capturing' (infantry moving in) once assigned to a raid
+    raidRole: null,     // 'staging' (gathering at a forward depot before the raid actually launches), 'vanguard' (combat units clearing the way), 'capture' (infantry waiting to follow up), or 'capturing' (infantry moving in) once assigned to a raid
+    stagingStartTime: null, // gameElapsed when this unit started gathering at a staging depot (raidRole==='staging'), so a slow-to-gather group can still launch after a timeout rather than waiting forever
+    prevEngageTargetId: null, // id of the attackTarget prevEngageDist was last measured against, so a freshly-acquired target is never compared against a stale distance to a different one
+    prevEngageDist: null, // this unit's own last-measured distance to its current attackTarget, used to detect the enemy closing in faster than this unit's own approach alone would explain (red only - see holdsGround)
     turretAssignment: null,  // id of a supply depot this turret (red AI) has been sent to guard, if any
     redFormationOffset: 0,  // red-only: lateral offset from a shared target's line of approach, so a group fans out side by side instead of stacking
     holdsGroundFixed: false, // true while actively dug in and engaged (units with setup time): protects against collision jostling resetting setup progress
@@ -8406,6 +8409,7 @@ function checkAndClearStuckUnits(dt) {
       t.turretAssignment = null;
       t.depotDefenseAssignment = null;
       t.homeDefenseAssignment = false;
+      t.stagingStartTime = null;
       // Grace period: with the assignment itself now cleared too, this
       // mostly guards against a *different* system picking the unit up and
       // sending it right back into the same spot on the very same tick.
@@ -8677,37 +8681,34 @@ function updateAI(dt) {
   // type above uses - an ambusher's only job now is to walk to its assigned
   // feature and let updateStealthConcealment take over once it arrives.
   free = free.filter(t => !t.ambushAssignment);
+  // A unit already committed to a raid (staging, vanguard, capture, or
+  // capturing - all of which set raidTargetId) must not be eligible to be
+  // swept into a DIFFERENT raid or staging group on some later tick just
+  // because it hasn't engaged anything yet. Without this, a unit still
+  // travelling toward its flanking waypoint (or still gathering at a
+  // staging depot) could get silently reassigned mid-journey, which would
+  // make the staging system below unreliable - the whole point of staging
+  // is that a group stays together until it's actually promoted.
+  free = free.filter(t => !t.raidTargetId);
 
-
-  // --- Raiding parties: once defenses are established, send ever-larger raids
-  // at blue's depots and base ---
-  // "Established" means the home garrison target is met and at least one
-  // captured depot has reached its own garrison target - a reasonable signal
-  // that red's expansion/fortification work is far enough along to spare
-  // units for offense. Raids draw from Tank, Auto Tank, and any other free
-  // unit not otherwise on assignment (Infantry rides along too, but only
-  // catches up once the raid's combat units have cleared the way - see
-  // below), and grow larger over time, occasionally massing into a much
-  // bigger raid, but never smaller than a fixed floor.
-  // Red now has exactly one behavior, always active from the very start of
-  // the match: there is no "defenses established" readiness gate to wait on
-  // any more (there's no home defense or depot garrison left to BE
-  // established in the first place - see above), and no requirement that
-  // units physically gather near red's own base before they're eligible for
-  // a raid. "They should be going out and searching for the blue team" -
-  // every free unit, wherever it currently is on the map, is a raid
-  // candidate; a raid's units simply converge on the chosen target from
-  // their own current positions rather than rallying at home first, which
-  // is exactly the "keep stopping near base to regroup" pattern this is
-  // meant to eliminate.
+  // --- Raiding parties: continuously send raids at blue's depots, units,
+  // and base ---
+  // Raids draw from Tank, Auto Tank, and any other free unit not otherwise
+  // on assignment (Infantry rides along too, but only catches up once the
+  // raid's combat units have cleared the way - see below). There is no
+  // "defenses established" readiness gate of any kind - red has exactly one
+  // behavior, active from the very start of the match. Units no longer need
+  // to physically gather near red's own base before they're eligible: "they
+  // should be going out and searching for the blue team" - every free unit,
+  // wherever it currently is, is a raid candidate. What they DO gather at,
+  // if red holds one, is a captured forward depot - see pickStagingPoint
+  // and the staging-promotion pass further below - "they will use their own
+  // captured supply depots as jumping off points to gather together before
+  // advancing... so they do not get strung out if starting the raid from
+  // their home base." Without a captured depot to stage at, a raid still
+  // launches directly from wherever its units already are, exactly as
+  // before.
   if (blueBase.alive) {
-    // Raid size grows over the course of the match (same escalation curve
-    // used for the old rally thresholds), with an occasional much larger
-    // raid thrown in, but never smaller than 5 regardless of how early it is.
-    // Aggressive mode sends waves far more readily: a much higher chance of
-    // massing a big raid each time, and it's willing to commit whatever it
-    // currently has on hand rather than waiting for a full-sized pool to
-    // accumulate first - prioritizing constant pressure over efficiency.
     // "Keep only minimal forces at home base, and send out the majority of
     // their units in attack groups of 10 to 20 units to attack the blue
     // team in force." One hard range, every single raid, for the entire
@@ -8766,27 +8767,85 @@ function updateAI(dt) {
 
     if (effectiveRaidPool.length >= effectiveMinPoolToLaunch && effectiveRaidPool.length > 0) {
       const raidForce = effectiveRaidPool.slice(0, Math.min(effectiveRaidPool.length, raidTarget));
-      const target = pickRaidTarget();
-      if (target) {
-        raidForce.forEach((t, i)=>{
-          t.raidTargetId = target.id;
-          t.raidRole = INFANTRY_CLASS_TYPES.has(t.unitType) ? 'capture' : 'vanguard';
-          if (t.raidRole === 'capture') {
-            // Infantry follows up rather than leading - held back near red's
-            // base until the vanguard has actually engaged, so it doesn't
-            // walk into the fight ahead of its own escort.
-            return;
-          }
-          // Flanking: alternate each vanguard unit onto the left or right
-          // flank (see issueFlankingRaidOrder) so the raid visibly splits
-          // into two arms rather than marching in as one frontal column.
-          const side = (i % 2 === 0) ? 1 : -1;
-          issueFlankingRaidOrder(t, target, side);
+      const stagingPoint = pickStagingPoint();
+      if (stagingPoint) {
+        // Gather at the forward depot first - raidTargetId points at the
+        // STAGING DEPOT here, not the eventual enemy target; see the
+        // staging-promotion pass below for where this group actually turns
+        // into an attack, once it's gathered.
+        raidForce.forEach(t => {
+          t.raidRole = 'staging';
+          t.raidTargetId = stagingPoint.id;
+          t.stagingStartTime = gameElapsed;
+          const sx = stagingPoint.x + (Math.random()*2-1)*80, sy = stagingPoint.y + (Math.random()*2-1)*80;
+          issueMoveOrder(t, isMountain(sx,sy) ? stagingPoint.x : sx, isMountain(sx,sy) ? stagingPoint.y : sy);
         });
-        lastRaidLaunchTime = gameElapsed;
+      } else {
+        // No forward depot held yet - launch directly from wherever the
+        // force already is, exactly as before, flanking from red's own base.
+        const target = pickRaidTarget();
+        if (target) {
+          raidForce.forEach((t, i)=>{
+            t.raidTargetId = target.id;
+            t.raidRole = INFANTRY_CLASS_TYPES.has(t.unitType) ? 'capture' : 'vanguard';
+            if (t.raidRole === 'capture') {
+              // Infantry follows up rather than leading - held back until the
+              // vanguard has actually engaged, so it doesn't walk into the
+              // fight ahead of its own escort.
+              return;
+            }
+            // Flanking: alternate each vanguard unit onto the left or right
+            // flank (see issueFlankingRaidOrder) so the raid visibly splits
+            // into two arms rather than marching in as one frontal column.
+            const side = (i % 2 === 0) ? 1 : -1;
+            issueFlankingRaidOrder(t, target, side, redBase.x, redBase.y);
+          });
+          lastRaidLaunchTime = gameElapsed;
+        }
       }
     }
   }
+
+  // Promotes a staging group to an actual raid once it has gathered at its
+  // depot - either the whole group has physically arrived, or (so stragglers
+  // and combat losses can't leave a group waiting forever) a flat timeout has
+  // elapsed since staging began, in which case it launches with whoever
+  // actually made it. Grouped by which depot each unit is staging at, since
+  // more than one captured depot could be staging a group at the same time.
+  const STAGING_TIMEOUT = 25; // seconds - launch anyway once a staged group has been gathering this long, even if incomplete
+  const STAGING_ARRIVAL_RADIUS = 150;
+  const stagingByDepot = {};
+  redTanks.forEach(t => {
+    if (t.raidRole !== 'staging' || !t.raidTargetId) return;
+    (stagingByDepot[t.raidTargetId] = stagingByDepot[t.raidTargetId] || []).push(t);
+  });
+  Object.keys(stagingByDepot).forEach(depotIdKey => {
+    const group = stagingByDepot[depotIdKey];
+    const depot = entities.find(e => e.id === Number(depotIdKey));
+    if (!depot || !depot.alive || depot.team !== 'red') {
+      // Lost the depot while gathering - release the group back to free so
+      // ordinary search/raid logic picks each unit up again next tick,
+      // rather than leaving it waiting at a staging point that no longer
+      // means anything.
+      group.forEach(t => { t.raidRole = null; t.raidTargetId = null; t.stagingStartTime = null; t.target = null; t.path = null; });
+      return;
+    }
+    const arrivedCount = group.filter(t => Math.hypot(t.x-depot.x, t.y-depot.y) <= STAGING_ARRIVAL_RADIUS).length;
+    const oldestStagingStart = Math.min.apply(null, group.map(t => t.stagingStartTime==null ? gameElapsed : t.stagingStartTime));
+    const timedOut = (gameElapsed - oldestStagingStart) > STAGING_TIMEOUT;
+    if (arrivedCount < group.length && !timedOut) return;
+    const target = pickRaidTarget();
+    if (!target) return; // no valid target right now (e.g. blueBase just fell) - stay gathered and try again next tick
+    group.forEach((t, i) => {
+      t.stagingStartTime = null;
+      t.raidTargetId = target.id;
+      t.raidRole = INFANTRY_CLASS_TYPES.has(t.unitType) ? 'capture' : 'vanguard';
+      if (t.raidRole === 'capture') return;
+      const side = (i % 2 === 0) ? 1 : -1;
+      issueFlankingRaidOrder(t, target, side, depot.x, depot.y);
+    });
+    lastRaidLaunchTime = gameElapsed;
+  });
 
   // Infantry assigned to a raid ('capture' role) waits until its vanguard has
   // actually closed on the target (or engaged something) before moving in
@@ -8889,25 +8948,49 @@ function updateAI(dt) {
     return best;
   }
 
+  // "The red team will use their own captured supply depots as 'jumping off
+  // points' to gather together before advancing on the blue team in a
+  // raid... so they do not get strung out if starting the raid from their
+  // home base." Picks the best red-owned, non-home depot to stage the next
+  // raid from - the one closest to blue's base, since that's the most
+  // useful forward position to launch the next push from (also naturally
+  // favors whichever depot red most recently pushed its expansion toward).
+  // Returns null if red doesn't currently hold any depot beyond its own
+  // home ones, in which case raid formation falls back to launching
+  // directly from wherever units already are, exactly as before.
+  function pickStagingPoint() {
+    const capturedDepots = entities.filter(e => e.kind==='supply' && e.alive && e.team==='red' &&
+      Math.hypot(e.x-redBase.x, e.y-redBase.y) > RALLY_RADIUS);
+    if (capturedDepots.length === 0) return null;
+    capturedDepots.sort((a,b) => Math.hypot(a.x-blueBase.x,a.y-blueBase.y) - Math.hypot(b.x-blueBase.x,b.y-blueBase.y));
+    return capturedDepots[0];
+  }
+
   // Sends a raid unit toward `target` via a wide lateral swing to one side
-  // (side: +1 or -1) rather than a straight line from red's base - "the red
-  // team will try flanking the blue team positions". Splits the raid's
-  // vanguard across both sides (see the raidForce.forEach call site below),
-  // so the force visibly divides into two arms approaching from different
-  // angles instead of marching in as a single frontal column. Auto-engage
-  // stays active the whole way (issueMoveOrder's suppressAutoEngage is left
-  // false, same as the raid order this replaces), so a flanking unit still
-  // fights anything it runs into en route rather than beelining past it.
-  function issueFlankingRaidOrder(t, target, side) {
+  // (side: +1 or -1) rather than a straight line from the raid's origin -
+  // "the red team will try flanking the blue team positions". Splits the
+  // raid's vanguard across both sides (see the raidForce.forEach call sites
+  // below), so the force visibly divides into two arms approaching from
+  // different angles instead of marching in as a single frontal column.
+  // originX/originY is wherever the raid is actually setting out from - the
+  // staging depot it just gathered at, if it gathered at one, or red's own
+  // base for a raid launched directly with no staging step - never
+  // hardcoded to redBase any more, since a flank computed from the wrong
+  // origin point doesn't actually look like it's swinging around anything.
+  // Auto-engage stays active the whole way (issueMoveOrder's
+  // suppressAutoEngage is left false, same as the raid order this
+  // replaces), so a flanking unit still fights anything it runs into en
+  // route rather than beelining past it.
+  function issueFlankingRaidOrder(t, target, side, originX, originY) {
     issueMoveOrder(t, target.x, target.y); // full reset (attackTarget/stealth/build/etc.) - the path/target it computes gets overwritten below
-    const axisX = target.x-redBase.x, axisY = target.y-redBase.y;
+    const axisX = target.x-originX, axisY = target.y-originY;
     const axisLen = Math.hypot(axisX,axisY) || 1;
     const nax = axisX/axisLen, nay = axisY/axisLen;
-    const perpX = -nay*side, perpY = nax*side; // perpendicular to the red-base->target axis, mirrored per side
+    const perpX = -nay*side, perpY = nax*side; // perpendicular to the origin->target axis, mirrored per side
     const flankOffset = 220 + Math.random()*140; // how wide the swing out to the side is
-    const flankDepth = 0.5 + Math.random()*0.3; // how far along the axis (from red's base toward the target) the swing-out waypoint sits
-    const wpX = redBase.x + axisX*flankDepth + perpX*flankOffset;
-    const wpY = redBase.y + axisY*flankDepth + perpY*flankOffset;
+    const flankDepth = 0.5 + Math.random()*0.3; // how far along the axis (from the origin toward the target) the swing-out waypoint sits
+    const wpX = originX + axisX*flankDepth + perpX*flankOffset;
+    const wpY = originY + axisY*flankDepth + perpY*flankOffset;
     const jitter = 70;
     const finalX = target.x + (Math.random()*2-1)*jitter;
     const finalY = target.y + (Math.random()*2-1)*jitter;
@@ -9466,6 +9549,25 @@ function updateTank(t, dt, now) {
         // (no minimum) and never affects them.
         const minRange = t.minRange || 0;
         const canFire = d <= t.range && d >= minRange && !lineBlockedBySight(t.x,t.y,t.attackTarget.x,t.attackTarget.y);
+        // "If the blue team advance on them, the red team will set their
+        // units to Defend." Tracks the distance to the current attack
+        // target tick-to-tick, keyed by the target's own id so a freshly-
+        // acquired target is never compared against a stale distance to a
+        // different one - if the gap has closed by more than this unit's
+        // own movement alone could explain over that time, the enemy must
+        // be closing the distance too, so red holds its ground and lets
+        // them come into range rather than continuing to chase (which could
+        // otherwise send two approaching forces straight past whatever
+        // firing line red has already formed up into). Blue is unaffected -
+        // the player directs blue's units manually.
+        if (t.team === 'red' && t.prevEngageTargetId === t.attackTarget.id && t.prevEngageDist != null) {
+          const closedBy = t.prevEngageDist - d;
+          const ownContribution = effectiveSpeed(t) * dt * 1.2; // margin for an angled, non-direct approach path
+          if (closedBy > ownContribution) t.defending = true;
+        }
+        t.prevEngageTargetId = t.attackTarget.id;
+        t.prevEngageDist = d;
+
         // Units that can't fire while moving (per their stat table) never close
         // distance on a target - they hold ground and wait for something to come
         // into range, since advancing would only delay them further from ever
