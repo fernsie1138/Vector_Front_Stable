@@ -560,13 +560,6 @@
 <div id="optionsScreen">
   <div id="launchTitle">NEW GAME</div>
   <div class="optionGroup">
-    <div class="optionLabel">AI Stance</div>
-    <div class="optionRow">
-      <button class="optionBtn" id="optAggressive" data-group="stance" data-value="aggressive">AGGRESSIVE</button>
-      <button class="optionBtn" id="optDefensive" data-group="stance" data-value="defensive">DEFENSIVE</button>
-    </div>
-  </div>
-  <div class="optionGroup">
     <div class="optionLabel">Map Size</div>
     <div class="optionRow">
       <button class="optionBtn" id="optSizeSmall" data-group="size" data-value="small">SMALL</button>
@@ -784,20 +777,20 @@
 "use strict";
 
 // ---------- App state ----------
-// 'launch' = launch screen showing AGGRESSIVE/DEFENSIVE/TEST options (game loop idle)
+// 'launch' = launch screen showing PLAY/TEST options (game loop idle)
 // 'play'   = normal match against the AI
 // 'test'   = weapon-testing arena, player controls both teams, no fog/AI/economy
 let appState = 'launch';
 
-// Chosen on the launch screen and read by the red AI throughout updateAI:
-// 'defensive' = the original behavior - expand, garrison everything captured,
-//   fortify the home base, and only once that's all done start raiding.
-// 'aggressive' = still captures depots early with Infantry (map control still
-//   matters for the supply income), but never garrisons anything and skips
-//   home-base fortification entirely - all of that production capacity goes
-//   into raiding instead, and raids start immediately rather than waiting for
-//   defenses to be established.
-let redStrategy = 'defensive';
+// Red has exactly one behavior now - there is no longer an Aggressive/
+// Defensive choice. "Remove anything that keeps the red team near their
+// base. They should be going out and searching for the blue team and when
+// they locate any blue team units they should attack them." Red still
+// captures depots early with Infantry (map control still matters for the
+// supply income - see the capture-squad logic below), but never garrisons
+// anything, never fortifies its home base, and never gathers near its own
+// base before committing a raid - every free unit, wherever it currently is,
+// is either actively capturing, escorting, raiding, or searching for blue.
 // New Game option: "Mechs can capture supply points... this allows the
 // player to play against an enemy with no infantry." Off by default -
 // capture eligibility is normally Infantry-class only (see
@@ -815,26 +808,6 @@ const MECH_CLASS_TYPES = new Set(['mech', 'lrmmech']);
 // created red-owned instead).
 let neutralDepotsStartRed = false;
 
-// Home base defense targets: fixed, randomized ONCE per match (see
-// enterPlayMode) rather than recalculated every tick or grown over time -
-// "it will not spawn any more than this" is an explicit hard cap per
-// structure type, replacing the old shared HOME_DEFENSE_TARGET pool (a
-// single combined count across every deployable type, which also used to
-// keep growing indefinitely in defensive mode). Each of the three fields
-// below is rolled once to a specific number within its stated range at
-// match start, so the AI has one stable, well-defined goal for the whole
-// match rather than a moving target.
-let redHomeDefenseTargets = {
-  // Capped so the five types together never exceed 6 total - "they need to
-  // keep only minimal forces at their home base, and send out the majority
-  // of their units in attack groups of 10 to 20 units" - cut roughly in
-  // half again from the previous 15-unit ceiling (4+4+3+2+2), which was
-  // already a reduction from an even larger original cap but still left a
-  // home garrison that could rival a full raid's own size.
-  foxhole: 2, barricade: 1,
-  turret: 1, siegemortar: 1, blockhouse: 1 // up to these EACH, independently - not a shared pool between the three
-};
-
 // Testing/debug toggle: when true, isVisible/isExplored report everything as
 // fully seen regardless of the actual fog data underneath, and red units
 // render unconditionally instead of only when currently in blue's sight.
@@ -851,7 +824,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 165;
+const GAME_VERSION = 166;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -8196,28 +8169,14 @@ let aiTimer = 0;
 // are small skirmishes but late-game pushes are large mixed-arms assaults.
 // gameElapsed is advanced once per AI tick in updateAI.
 let gameElapsed = 0;
-function currentRallyMin() {
-  // starts at 5, grows by 1 every 45s of elapsed play, capped so it never
-  // demands an unreasonably large army before red will ever attack
-  return Math.min(25, 5 + Math.floor(gameElapsed / 45));
-}
-function currentRallyMax() {
-  return currentRallyMin() * 2;
-}
-const RALLY_RADIUS = 260; // how close to the base counts as "gathered" for rally purposes
+const RALLY_RADIUS = 260; // how close to a BASE counts as "nearby" for depot-exclusion purposes (see capturableDepots below) - no longer used for red's own rally/gathering, which no longer exists
 
-// Red alternates between an aggressive posture (push toward blue's base once
-// rallied) and a defensive posture (hold everyone back near home) on a timer,
-// so a human opponent sees genuine ebb and flow rather than a single unchanging
-// strategy. Each posture lasts a randomized stretch so the switch isn't metronomic.
-let redPosture = 'defend';
-let redPostureTimer = 15 + Math.random()*10;
-// Tracks the last time (gameElapsed) a raid actually launched, so aggressive
-// mode can detect a genuine stall (see STALL_THRESHOLD below) and force a
-// raid with whatever's available rather than silently doing nothing while
-// units pile up idle at home. Starts at 0 (match start) rather than a large
-// negative offset, so the very first stall check compares against actual
-// elapsed time instead of immediately reading as an enormous drought.
+// Tracks the last time (gameElapsed) a raid actually launched, so the AI can
+// detect a genuine stall (see STALL_THRESHOLD below) and force a raid with
+// whatever's available rather than silently doing nothing while units pile
+// up idle. Starts at 0 (match start) rather than a large negative offset, so
+// the very first stall check compares against actual elapsed time instead of
+// immediately reading as an enormous drought.
 let lastRaidLaunchTime = 0;
 
 // Red aggressively commits Infantry to capturing supply depots - this is now
@@ -8292,47 +8251,27 @@ const BUY_BUTTON_IDS = {
   hkunit: 'btnBuyHKUnit'
 };
 
+// Red now has exactly one purchasing profile, matching its one behavior:
+// constant raiding, no home defense or depot garrison to spend on. Blockhouse
+// and Siege Mortar are both permanently-deployed, never-move-again
+// structures with no remaining role at all now that there's no fortification
+// system left to place them for - zeroed outright, the same treatment Medic
+// gets below, rather than just weighted low. Mortar is kept - it's mobile
+// fire support that moves and re-positions with the raid rather than a
+// permanent emplacement. Everything that actually goes into a raid
+// (Infantry/AT Infantry/Sappers for the infantry component, Tank/Auto
+// Tank/Scout/Mech/Assault Tank/LRM Mech/APC for the vehicle component) is
+// weighted well above anything else. Mech is weighted highest of the raid
+// vanguard here: it's slow, so constant-raiding play - which is all about
+// throwing waves at the enemy as fast as possible - benefits from having
+// plenty on hand well before a raid actually needs to move out. Assault Tank
+// is especially good at this since fixed defenses on blue's side (deployed
+// Turret/Blockhouse, dug-in Artillery/Mortar) are exactly what a raid runs
+// into first. LRM Mech is expensive and its 8s reload is slow, so it's kept
+// at a moderate weight - a couple in a raid add valuable splash damage
+// against clustered defenders, but a whole raid of them would spend most of
+// its time reloading.
 const RED_PURCHASE_WEIGHTS = {
-  infantry: 5, tank: 3, artillery: 3, mech: 2, assaulttank: 2, lrmmech: 1,
-  blockhouse: 2, mortar: 2, apc: 1,
-  scout: 1, autotank: 1,
-  siegemortar: 2, atinfantry: 2, sappers: 2,
-  // Technicals: cheap, fast, fragile (0 armor) - weighted similarly to their
-  // closest conventional counterpart (autotank/atinfantry/mortar), not given
-  // special priority, since nothing in the request calls for the AI to favor
-  // them over the equivalent existing unit.
-  technicalmg: 1, technicalat: 2, technicalmortar: 2,
-  // HK Unit: a capable, moderately-priced flying unit similar in role to
-  // autotank (same base stats) but immune to terrain - weighted a bit above
-  // autotank's own 1 to reflect that extra versatility, without making it
-  // an overwhelming favorite.
-  hkunit: 2
-};
-// "When the AI Stance is set to aggressive... they will not build barricades
-// or foxholes or defensive structures like turrets, blockhouses or siege
-// mortars. They will build infantry and vehicles and aggressively attack the
-// blue team." Blockhouse and Siege Mortar are both permanently-deployed,
-// never-move-again structures (the update loop's home-defense/fortification
-// system that used to be their only real use for aggressive is now skipped
-// entirely for this strategy - see the `if (redStrategy !== 'aggressive')`
-// guards around it), so they're explicitly zeroed here, the same treatment
-// Medic already gets below, rather than just weighted low. Mortar is kept -
-// it's mobile fire support that moves and re-positions with the raid rather
-// than a permanent emplacement, which is the actual distinction the
-// instruction is drawing (structures that dig in forever vs. everything
-// else). Everything that actually goes into a raid (Infantry/AT Infantry/
-// Sappers for the infantry component, Tank/Auto Tank/Scout/Mech/Assault
-// Tank/LRM Mech/APC for the vehicle component) is weighted well above
-// anything else. Mech is weighted highest of the raid vanguard here: it's
-// slow, so aggressive mode - which is all about throwing waves at the enemy
-// as fast as possible - benefits from having plenty on hand well before a
-// raid actually needs to move out. Assault Tank is especially good at this
-// since fixed defenses on blue's side (deployed Turret/Blockhouse, dug-in
-// Artillery/Mortar) are exactly what a raid runs into first. LRM Mech is
-// expensive and its 8s reload is slow, so it's kept at a moderate weight - a
-// couple in a raid add valuable splash damage against clustered defenders,
-// but a whole raid of them would spend most of its time reloading.
-const RED_PURCHASE_WEIGHTS_AGGRESSIVE = {
   infantry: 5, tank: 5, mech: 4, assaulttank: 4, lrmmech: 2, autotank: 3, scout: 3,
   artillery: 2, mortar: 2, apc: 2,
   blockhouse: 0, siegemortar: 0,
@@ -8342,8 +8281,8 @@ const RED_PURCHASE_WEIGHTS_AGGRESSIVE = {
   // if short-ranged, threat), so both are weighted comparably to regular
   // Infantry rather than down at the support-structure tier.
   atinfantry: 3, sappers: 2,
-  // Technicals: fast and cheap fits an aggressive raid's profile reasonably
-  // well, weighted near their closest conventional counterparts above
+  // Technicals: fast and cheap fits a raiding profile reasonably well,
+  // weighted near their closest conventional counterparts above
   // (autotank/atinfantry/mortar) rather than left to the generic default.
   technicalmg: 2, technicalat: 3, technicalmortar: 2,
   // HK Unit: terrain-immune mobility is a genuine asset for a raiding force
@@ -8352,15 +8291,14 @@ const RED_PURCHASE_WEIGHTS_AGGRESSIVE = {
   // default.
   hkunit: 3
 };
-// Medic is explicitly zeroed here (not just omitted) in both tables above -
-// pickWeightedPurchaseTarget defaults any UNLISTED type to weight 1, which
-// is not what's wanted here. With no weapon and no AI logic to actually
-// assign its Heal ability to a target, a purchased Medic would just wander
-// uselessly - kept a player-only support unit for now.
+// Medic is explicitly zeroed here (not just omitted) - pickWeightedPurchaseTarget
+// defaults any UNLISTED type to weight 1, which is not what's wanted here.
+// With no weapon and no AI logic to actually assign its Heal ability to a
+// target, a purchased Medic would just wander uselessly - kept a player-only
+// support unit for now.
 RED_PURCHASE_WEIGHTS.medic = 0;
-RED_PURCHASE_WEIGHTS_AGGRESSIVE.medic = 0;
 function pickWeightedPurchaseTarget() {
-  const weights = redStrategy === 'aggressive' ? RED_PURCHASE_WEIGHTS_AGGRESSIVE : RED_PURCHASE_WEIGHTS;
+  const weights = RED_PURCHASE_WEIGHTS;
   const pool = [];
   // Skip anything unchecked for red on the Unit Options screen; fall back to
   // the full roster only in the degenerate case where every type has been
@@ -8382,37 +8320,6 @@ function pickWeightedPurchaseTarget() {
   });
   return pool[Math.floor(Math.random()*pool.length)];
 }
-
-// Red keeps a garrison of deployable defenders planted at supply depots it
-// owns (home depots and captured ones alike). turretAssignment on a guard
-// unit tracks which depot it's guarding, mirroring captureAssignment. Freshly
-// captured depots get reinforced with more than one defender (a mix of
-// Turret and Blockhouse), while red's own home depots only need the usual
-// single-guard baseline since they're already close to the main garrison.
-const GUARDS_PER_HOME_DEPOT = 1;
-// Captured depots get reinforced with more than one defender (a mix of
-// Turret and Blockhouse). In defensive mode this target keeps growing over
-// the course of the match rather than sitting at a small fixed number
-// forever, same reasoning as HOME_DEFENSE_TARGET below - defensive strategy
-// means red keeps reinforcing continuously, not "reach a small cap once and
-// then raid just as readily as aggressive mode would".
-function guardsPerCapturedDepot() {
-  return redStrategy === 'defensive' ? (3 + Math.floor(gameElapsed / 120)) : 3;
-}
-// Standing guards are spread out from the depot center as more of them stack
-// up (see the assignment loop below, dist = 70 + guardingCount*35), reaching
-// up to 70 + 2*35 = 140 for a captured depot's 3rd defender. Every proximity
-// check used to count "how many guards does this depot already have" or
-// "has this guard arrived close enough to deploy" must use a radius that
-// comfortably covers that full spread - a too-tight radius here was the
-// cause of a real bug where guards would visibly stand near a depot forever
-// without ever being counted as garrisoning it.
-const GUARD_PROXIMITY_RADIUS = 180;
-// Separately from the deployable garrison above, red also stations mobile
-// fire support (Artillery/Mortar) close to depots it owns, for the same
-// reason - a captured depot is an exposed forward position, and these two
-// unit types can hit anything approaching before it ever gets close.
-const FIRE_SUPPORT_PER_DEPOT = 2;
 
 // Red decides what to buy next by picking a weighted-random unit type from
 // the full roster, then saving toward exactly that one until it's affordable.
@@ -8538,7 +8445,7 @@ function updateAI(dt) {
     purchaseUnit('red', redPurchaseTarget);
     redPurchaseTarget = pickWeightedPurchaseTarget();
   } else if (supply.red >= UNIT_COSTS[redPurchaseTarget] * HOARD_MULTIPLE || nearCap) {
-    const weights = redStrategy === 'aggressive' ? RED_PURCHASE_WEIGHTS_AGGRESSIVE : RED_PURCHASE_WEIGHTS;
+    const weights = RED_PURCHASE_WEIGHTS;
     const affordable = ALL_UNIT_TYPES.filter(type => UNIT_COSTS[type] <= supply.red && unitEnabled.red[type]);
     if (affordable.length > 0) {
       // weighted choice among everything currently affordable, so the spend-
@@ -8553,13 +8460,6 @@ function updateAI(dt) {
       // pressure on an otherwise-stalled stockpile, not fulfilling that
       // target early.
     }
-  }
-
-  // Posture timer: flip between attack and defend periodically.
-  redPostureTimer -= dt;
-  if (redPostureTimer <= 0) {
-    redPosture = (redPosture === 'attack') ? 'defend' : 'attack';
-    redPostureTimer = redPosture === 'attack' ? (18 + Math.random()*12) : (14 + Math.random()*10);
   }
 
   aiTimer -= dt;
@@ -8721,146 +8621,6 @@ function updateAI(dt) {
   // tick's rally/attack/defend logic so they aren't immediately redirected
   free = free.filter(t => !t.captureAssignment && !t.escortAssignment);
 
-  // --- Deployable garrison: keep turrets, blockhouses, and repair stations
-  // planted at every red-owned supply depot ---
-  // Red always tries to station its deployable structures at depots it
-  // controls - its own home depots and any it has captured - reflecting a
-  // standing defensive priority around its economy, independent of the
-  // attack/defend posture cycle. Freshly captured depots (further from red's
-  // base) get reinforced much more heavily than red's own home depots, since
-  // they're exposed forward positions rather than already being close to the
-  // main garrison. Any of these three unit types already deployed (planted)
-  // anywhere is left alone forever, since none of them can ever move again
-  // regardless. turretAssignment is reused as a general "assigned depot to
-  // post up at" field for all three types, not just Turret.
-  const DEPLOYABLE_GUARD_TYPES = ['turret', 'blockhouse', 'siegemortar', 'foxhole', 'barricade'];
-  const redOwnedDepots = entities.filter(e => e.kind==='supply' && e.alive && e.team==='red');
-  const deployedGuards = redTanks.filter(t => DEPLOYABLE_GUARD_TYPES.includes(t.unitType) && t.permanentlyDeployed);
-  // Reserve enough freshly-available units of each home-defense-eligible
-  // type (turret/blockhouse/siegemortar/foxhole/barricade - see
-  // redHomeDefenseTargets/HOME_DEFENSE_TYPES much further below) so this
-  // depot-guard system can't claim every single one before the home-
-  // defense ring ever gets a chance to fill its own fixed targets. Without
-  // this, depot-guarding (which runs first in the tick and is otherwise
-  // unconditional about claiming any free deployable unit) was silently
-  // starving the home-defense ring completely - a real bug found during
-  // testing, where 14 Foxholes and 13 Barricades existed on the red team
-  // but not one had ever been assigned to home defense, because every
-  // single one had already been claimed as a depot guard the moment it
-  // became free, before the home-defense code further down ever saw it.
-  // This doesn't touch which units depot-guarding is ALLOWED to use, only
-  // how many of each type it can see as available - the reserved ones
-  // remain fully eligible for depot-guarding on a later tick, once home
-  // defense's own targets are satisfied and stops reserving them.
-  const homeDefenseStillNeeded = {};
-  ['turret','blockhouse','siegemortar','foxhole','barricade'].forEach(type => {
-    const target = redHomeDefenseTargets[type] || 0;
-    const already = redTanks.filter(t => t.unitType===type && t.homeDefenseAssignment).length;
-    homeDefenseStillNeeded[type] = Math.max(0, target - already);
-  });
-  const reservedForHomeDefense = new Set();
-  ['turret','blockhouse','siegemortar','foxhole','barricade'].forEach(type => {
-    let remaining = homeDefenseStillNeeded[type];
-    if (remaining <= 0) return;
-    free.forEach(t => {
-      if (remaining<=0) return;
-      if (t.unitType===type && !t.turretAssignment && !t.homeDefenseAssignment && !reservedForHomeDefense.has(t.id)) {
-        reservedForHomeDefense.add(t.id);
-        remaining--;
-      }
-    });
-  });
-  const freeGuards = free.filter(t => DEPLOYABLE_GUARD_TYPES.includes(t.unitType) && !t.turretAssignment && !reservedForHomeDefense.has(t.id) && !t.homeDefenseAssignment);
-
-  if (redStrategy === 'defensive') {
-    // release stale guard assignments (depot lost, destroyed, or no longer red)
-    free.forEach(t=>{
-      if (!DEPLOYABLE_GUARD_TYPES.includes(t.unitType) || !t.turretAssignment) return;
-      const dep = entities.find(e=>e.id===t.turretAssignment);
-      if (!dep || !dep.alive || dep.team!=='red') t.turretAssignment = null;
-    });
-
-    // Distribute ALL currently-available guards in this single pass (not just
-    // one per depot per tick), and prioritize finishing off a depot that's
-    // already partially garrisoned before starting a fresh one at zero - this
-    // is what actually lets any given depot reach its full target in a
-    // reasonable time, rather than every depot perpetually sitting at just 1
-    // guard because each new arrival keeps getting spread to a different,
-    // completely unstarted depot instead.
-    const depotGuardNeeds = redOwnedDepots.map(dep=>{
-      const isHomeDepot = Math.hypot(dep.x-redBase.x, dep.y-redBase.y) <= RALLY_RADIUS;
-      const targetGuards = isHomeDepot ? GUARDS_PER_HOME_DEPOT : guardsPerCapturedDepot();
-      // Count already-planted guards (via deployedGuards, by proximity) plus any
-      // guard still traveling toward this depot but not yet deployed. The
-      // !t.permanentlyDeployed check is essential here: without it, a guard
-      // that has already been counted once via deployedGuards would also match
-      // this second filter (its turretAssignment lingers after deployment) and
-      // get counted twice, making every depot look more fully garrisoned than
-      // it really is and stalling the whole distribution below.
-      const guardingCount = deployedGuards.filter(t => Math.hypot(t.x-dep.x, t.y-dep.y) < GUARD_PROXIMITY_RADIUS).length
-        + free.filter(t => DEPLOYABLE_GUARD_TYPES.includes(t.unitType) && t.turretAssignment===dep.id && !t.permanentlyDeployed).length;
-      return { dep, targetGuards, guardingCount };
-    }).filter(d => d.guardingCount < d.targetGuards)
-      .sort((a,b) => b.guardingCount - a.guardingCount); // most already-garrisoned first
-
-    const availableGuards = freeGuards.filter(t => !t.turretAssignment);
-    let guardCursor = 0;
-    depotGuardNeeds.forEach(need=>{
-      while (need.guardingCount < need.targetGuards && guardCursor < availableGuards.length) {
-        // prefer Turret/Blockhouse for depot reinforcement over Repair Station,
-        // since a freshly captured position needs firepower most of all
-        let guard = null;
-        for (let i=guardCursor;i<availableGuards.length;i++) {
-          if (availableGuards[i].unitType==='turret' || availableGuards[i].unitType==='blockhouse') { guard = availableGuards[i]; availableGuards.splice(i,1); break; }
-        }
-        if (!guard) { guard = availableGuards[guardCursor]; availableGuards.splice(guardCursor,1); }
-        if (!guard) break;
-        guard.turretAssignment = need.dep.id;
-        // stand a short distance off the depot's exact center so it doesn't
-        // overlap the depot's own collision footprint - spread further out as
-        // more defenders stack up on the same depot so they don't pile on the
-        // same spot
-        const ang = Math.random()*Math.PI*2;
-        const dist = 70 + need.guardingCount*35;
-        const gx = need.dep.x + Math.cos(ang)*dist, gy = need.dep.y + Math.sin(ang)*dist;
-        issueMoveOrder(guard, isMountain(gx,gy) ? need.dep.x : gx, isMountain(gx,gy) ? need.dep.y : gy);
-        need.guardingCount++;
-      }
-    });
-
-    // Any deployable unit that arrives at its assigned post (stopped moving,
-    // close by) deploys automatically rather than waiting on a player DEFEND
-    // command - this is what actually plants Turrets, Blockhouses, and Repair
-    // Stations for the AI. Without this step, an AI-purchased deployable unit
-    // would just sit forever undeployed: unable to fire (Turret/Blockhouse) or
-    // repair anything (Repair Station), since deployment is normally a
-    // player-issued DEFEND action.
-    free.forEach(t=>{
-      if (!DEPLOYABLE_GUARD_TYPES.includes(t.unitType) || !t.turretAssignment || t.target) return;
-      const dep = entities.find(e=>e.id===t.turretAssignment);
-      if (!dep || !dep.alive) return;
-      // Uses the same GUARD_PROXIMITY_RADIUS as every other guard-counting
-      // check, so a unit standing at its assigned spot is never miscounted as
-      // "not there yet" by one check while another considers it arrived.
-      if (Math.hypot(t.x-dep.x, t.y-dep.y) < GUARD_PROXIMITY_RADIUS) {
-        t.defending = true;
-        // Same road-avoidance nudge as the player's own DEFEND order (see
-        // above) - a guard walking toward a captured depot has no reason to
-        // avoid roads on its way in, so without this it could easily settle
-        // and lock in place directly on top of one, especially since depots
-        // often sit right beside the road network they were built along.
-        const nudged = nudgeOffRoad(t.x, t.y, t.radius);
-        t.x = nudged.x; t.y = nudged.y;
-        t.permanentlyDeployed = true;
-      }
-    });
-  } // end if (redStrategy === 'defensive') - garrison assignment/deployment
-
-  // exclude guards on duty (assigned or already planted) from the rest of
-  // this tick's rally/attack/defend logic - harmless no-op in aggressive
-  // mode, since nothing acquires a turretAssignment there in the first place
-  free = free.filter(t => !DEPLOYABLE_GUARD_TYPES.includes(t.unitType) || (!t.turretAssignment && !t.permanentlyDeployed));
-
   // --- Ambush: send a small number of free Infantry to lurk near a tree or
   // building, letting the stealth-concealment mechanic (updateStealthConcealment)
   // do the actual hiding once they arrive and dwell there - "Red team will
@@ -8918,272 +8678,6 @@ function updateAI(dt) {
   // feature and let updateStealthConcealment take over once it arrives.
   free = free.filter(t => !t.ambushAssignment);
 
-  // --- Fire support: station free Artillery/Mortar near owned depots ---
-  // Rather than getting swept into the main rally/attack pool, idle fire
-  // support is actively sent to hold position near a depot that doesn't yet
-  // have enough of it, giving captured ground some standoff firepower against
-  // anything approaching. A unit already holding a valid assignment (and not
-  // still traveling toward it) is left exactly where it is - once it's dug in
-  // and firing, that's precisely where it should stay. This entire step is
-  // skipped in aggressive mode: fire support isn't stationed for defense at
-  // all there, it goes straight into raids like everything else.
-  const FIRE_SUPPORT_TYPES = ['artillery', 'mortar'];
-  if (redStrategy === 'defensive') {
-  free.forEach(t=>{
-    if (!FIRE_SUPPORT_TYPES.includes(t.unitType) || !t.depotDefenseAssignment) return;
-    const dep = entities.find(e=>e.id===t.depotDefenseAssignment);
-    if (!dep || !dep.alive || dep.team!=='red') t.depotDefenseAssignment = null;
-  });
-  const freeFireSupport = free.filter(t => FIRE_SUPPORT_TYPES.includes(t.unitType) && !t.depotDefenseAssignment);
-  if (freeFireSupport.length > 0) {
-    redOwnedDepots.forEach(dep=>{
-      const stationedCount = redTanks.filter(t => FIRE_SUPPORT_TYPES.includes(t.unitType) &&
-        (t.depotDefenseAssignment===dep.id) && Math.hypot(t.x-dep.x,t.y-dep.y) < 500).length;
-      if (stationedCount >= FIRE_SUPPORT_PER_DEPOT) return;
-      const unit = freeFireSupport.find(t => !t.depotDefenseAssignment);
-      if (!unit) return;
-      unit.depotDefenseAssignment = dep.id;
-      // stand back at a range-appropriate distance rather than right on top
-      // of the depot, so it can actually use its range once it settles
-      const ang = Math.random()*Math.PI*2;
-      const dist = 150 + Math.random()*100;
-      const gx = dep.x + Math.cos(ang)*dist, gy = dep.y + Math.sin(ang)*dist;
-      issueMoveOrder(unit, isMountain(gx,gy) ? dep.x : gx, isMountain(gx,gy) ? dep.y : gy);
-    });
-  }
-  // exclude fire support already stationed (assigned, whether still traveling
-  // or arrived and dug in) from the rest of this tick's rally/attack/defend logic
-  free = free.filter(t => !FIRE_SUPPORT_TYPES.includes(t.unitType) || !t.depotDefenseAssignment);
-
-  // Fire support that has arrived at its assigned post is explicitly set to
-  // defend, same as the deployable guards above - this is what the player's
-  // own DEFEND command does (hold ground, don't chase, take reduced damage),
-  // and matches "artillery/mortar stationed for defense" as a genuine defend
-  // order rather than just happening to be stationary.
-  redTanks.forEach(t=>{
-    if (!FIRE_SUPPORT_TYPES.includes(t.unitType) || !t.depotDefenseAssignment || t.target || t.defending) return;
-    const dep = entities.find(e=>e.id===t.depotDefenseAssignment);
-    if (dep && Math.hypot(t.x-dep.x, t.y-dep.y) < 260) t.defending = true;
-  });
-  } // end if (redStrategy === 'defensive') - fire support stationing
-
-  // --- Home base garrison: station Turret/Artillery/Mortar around red's own
-  // base, set to defend ---
-  // "When the AI Stance is set to aggressive, the red team will no longer
-  // cluster around its base. They will not build barricades or foxholes or
-  // defensive structures like turrets, blockhouses or siege mortars." - this
-  // entire fortification-construction system (this section) and the
-  // standing home-defense ring below it are both skipped entirely for
-  // aggressive - every Infantry/Sappers that would otherwise be pulled off
-  // to build and garrison stays in the free pool, available for raids and
-  // capture duty instead. Unchanged for defensive.
-  if (redStrategy !== 'aggressive') {
-  // Since Foxhole and Barricade are never purchased directly (see
-  // UNIT_COSTS, which deliberately omits both), they can only ever join the
-  // home defense ring below if some Infantry/Sappers is actually commanded
-  // to build one first - purchasing more Infantry/Sappers alone would never
-  // produce either structure on its own. This designates a small number of
-  // free, non-deployed Infantry/Sappers near the home base to do exactly
-  // that: Infantry builds Foxhole (the only structure it's eligible for -
-  // see BUILDABLE_STRUCTURES' builtBy list), Sappers builds Barricade
-  // specifically (leaving Foxhole-building to Infantry so both structure
-  // types actually get built rather than Sappers monopolizing Foxhole too).
-  // Capped at a small fixed count per structure type so this doesn't drain
-  // every Infantry/Sappers red owns into permanent construction duty.
-  // Concurrency cap on how many Infantry/Sappers are actively OUT
-  // building at once (kept modest so this doesn't drain every available
-  // Infantry/Sappers into permanent construction duty simultaneously),
-  // separate from the actual FINAL target for each structure
-  // (redHomeDefenseTargets.foxhole/barricade, "5-8"/"4-6") - the count
-  // check below compares against the real target, not this concurrency
-  // limit, so building keeps getting re-triggered across multiple build
-  // cycles until the real target is reached rather than permanently
-  // stalling once 2 Foxholes exist.
-  const HOME_FORTIFICATION_CONCURRENT_BUILDERS = 2;
-  const buildingFoxholeCount = redTanks.filter(t => t.unitType==='infantry' && (t.isBuilding && t.buildingType==='foxhole' || t.homeFortifyBuildAssignment==='foxhole')).length
-    + redTanks.filter(t => t.unitType==='foxhole' && t.builtForHomeFortification).length;
-  const buildingBarricadeCount = redTanks.filter(t => t.unitType==='sappers' && (t.isBuilding && t.buildingType==='barricade' || t.homeFortifyBuildAssignment==='barricade')).length
-    + redTanks.filter(t => t.unitType==='barricade' && t.builtForHomeFortification).length;
-  const activeFoxholeBuilders = redTanks.filter(t => t.unitType==='infantry' && (t.isBuilding && t.buildingType==='foxhole' || (t.homeFortifyBuildAssignment==='foxhole' && !t.isBuilding))).length;
-  const activeBarricadeBuilders = redTanks.filter(t => t.unitType==='sappers' && (t.isBuilding && t.buildingType==='barricade' || (t.homeFortifyBuildAssignment==='barricade' && !t.isBuilding))).length;
-  if (buildingFoxholeCount < redHomeDefenseTargets.foxhole && activeFoxholeBuilders < HOME_FORTIFICATION_CONCURRENT_BUILDERS) {
-    const candidate = free.find(t => t.unitType==='infantry' && !t.homeFortifyBuildAssignment && !t.captureAssignment && !t.ambushAssignment && !t.isBuilding);
-    if (candidate) {
-      candidate.homeFortifyBuildAssignment = 'foxhole';
-      // Picks a build site within the SAME 100-300 band the deploy-trigger
-      // itself checks (see HOME_DEFENSE_TYPES.forEach far below) - a
-      // Foxhole/Barricade never physically walks anywhere once built, so
-      // "arrival" isn't a real moment to gate deployment on the way it is
-      // for a purchased, mobile unit; the correct fix is placing the build
-      // site correctly to begin with. Retries a handful of random angles
-      // at a fixed 100-300 distance if a given angle lands on a mountain,
-      // rather than the old fallback of collapsing all the way back to the
-      // base's own exact position (distance 0, guaranteed outside the
-      // deploy band and the actual cause of some Barricades ending up
-      // stuck undeployed right on top of the base).
-      let gx, gy, tries = 0;
-      do {
-        const ang = Math.random()*Math.PI*2, dist = 100 + Math.random()*200;
-        gx = redBase.x + Math.cos(ang)*dist; gy = redBase.y + Math.sin(ang)*dist;
-        tries++;
-      } while (isMountain(gx,gy) && tries < 8);
-      if (!isMountain(gx,gy)) issueMoveOrder(candidate, gx, gy);
-      else candidate.homeFortifyBuildAssignment = null; // couldn't find clear ground nearby after several tries - abandon this attempt rather than build in a bad spot
-    }
-  }
-  if (buildingBarricadeCount < redHomeDefenseTargets.barricade && activeBarricadeBuilders < HOME_FORTIFICATION_CONCURRENT_BUILDERS) {
-    const candidate = free.find(t => t.unitType==='sappers' && !t.homeFortifyBuildAssignment && !t.captureAssignment && !t.ambushAssignment && !t.isBuilding);
-    if (candidate) {
-      candidate.homeFortifyBuildAssignment = 'barricade';
-      let gx, gy, tries = 0;
-      do {
-        const ang = Math.random()*Math.PI*2, dist = 100 + Math.random()*200;
-        gx = redBase.x + Math.cos(ang)*dist; gy = redBase.y + Math.sin(ang)*dist;
-        tries++;
-      } while (isMountain(gx,gy) && tries < 8);
-      if (!isMountain(gx,gy)) issueMoveOrder(candidate, gx, gy);
-      else candidate.homeFortifyBuildAssignment = null;
-    }
-  }
-  // CRITICAL: exclude every fortification-assigned unit from `free` for the
-  // REST of this tick's processing, the same way every other assignment
-  // type in this function already does (see the .filter calls after
-  // captureAssignment/ambushAssignment/homeDefenseAssignment above). Without
-  // this, a unit that was just assigned to build a Foxhole/Barricade would
-  // still be sitting in `free` when later logic further down (raids,
-  // rallying, capture-target picking) runs its own issueMoveOrder against
-  // the same unit - overriding the destination just set above, every single
-  // tick, before the unit could ever actually arrive and start building.
-  // This was the actual root cause of a real bug: the assignment was being
-  // granted correctly, but the unit's destination kept getting silently
-  // clobbered immediately afterward, so it never once reached the 220px
-  // arrival radius in testing despite the assignment logic running
-  // thousands of times over a 10-minute simulation.
-  free = free.filter(t => !t.homeFortifyBuildAssignment);
-  // Once an assigned builder reaches its spot near the base, start the
-  // actual build (the same isBuilding/buildProgress/buildingType fields the
-  // player's BUILD menu sets) - and tag the finished structure with
-  // builtForHomeFortification so the counts above recognize it as already
-  // fulfilling this quota once it completes, rather than looking like a
-  // fresh unfilled slot forever. Re-checks the CURRENT count against the
-  // target right here (not just back when the builder was first assigned)
-  // before actually starting construction - "a maximum of 5" is a hard
-  // ceiling, and without this re-check a builder that was assigned when
-  // the count still had room could still complete and push the total past
-  // 5 if other builders finished in the meantime. A builder that arrives
-  // to find its quota already full simply drops the assignment and goes
-  // back to being a free fighting unit rather than building anyway.
-  redTanks.forEach(t=>{
-    if (!t.homeFortifyBuildAssignment || t.isBuilding) return;
-    if (Math.hypot(t.x-redBase.x, t.y-redBase.y) < 310) {
-      const currentCount = t.homeFortifyBuildAssignment === 'foxhole' ? buildingFoxholeCount : buildingBarricadeCount;
-      const cap = redHomeDefenseTargets[t.homeFortifyBuildAssignment];
-      if (currentCount >= cap) {
-        t.homeFortifyBuildAssignment = null; // quota already met by the time this builder arrived - stand down, rejoin the fighting force
-        return;
-      }
-      t.target = null; t.path = null; t.attackTarget = null; t.autoEngaged = false; t.holdEngage = false; t.defending = false; t.state = 'idle';
-      t.isBuilding = true;
-      t.buildProgress = 0;
-      t.buildingType = t.homeFortifyBuildAssignment;
-      t.pendingHomeFortification = true; // carried through so the finished structure below can be tagged
-    }
-  });
-  // Tag every freshly-completed Foxhole/Barricade spawned from a tagged
-  // builder, so the count-check above recognizes it as an already-fulfilled
-  // slot rather than looking unfilled forever.
-  entities.forEach(e => {
-    if (e.kind==='tank' && e.team==='red' && (e.unitType==='foxhole' || e.unitType==='barricade') && !e.builtForHomeFortification && !e.homeDefenseAssignment) {
-      // A structure spawned near the home base without any other assignment
-      // yet is assumed to be one of this fortification pass's own products
-      // (nothing else currently spawns a fresh Foxhole/Barricade for red) -
-      // tag it so it's immediately picked up by the HOME_DEFENSE_TYPES
-      // ring logic right below, which both deploys it AND is what the
-      // count-check above recognizes as an already-fulfilled slot.
-      if (Math.hypot(e.x-redBase.x, e.y-redBase.y) < 320) {
-        e.builtForHomeFortification = true;
-      }
-    }
-  });
-  redTanks.forEach(t=>{
-    // Only clear a fortification-build assignment once the unit has
-    // actually FINISHED building (it must have been building at some point
-    // - tracked via homeFortifyWasBuilding - and no longer is now).
-    // Without that guard, this would incorrectly fire and wipe the
-    // assignment on the very same tick it was first set, before the unit
-    // ever had a chance to travel to its build site and start.
-    if (t.isBuilding) t.homeFortifyWasBuilding = true;
-    if (t.homeFortifyBuildAssignment && t.homeFortifyWasBuilding && !t.isBuilding) {
-      if (INFANTRY_CLASS_TYPES.has(t.unitType)) {
-        t.homeFortifyBuildAssignment = null;
-        t.homeFortifyWasBuilding = false;
-      }
-    }
-  });
-  } // end if (redStrategy !== 'aggressive') - fortification construction
-
-  // Separate from the depot garrison/fire-support above, red also keeps a
-  // standing ring of defenders directly around its own base. Each of the
-  // five deployable types now has its OWN independent cap - "5-8 foxholes",
-  // "4-6 barricades", "up to 3 of each" for turret/siege mortar/blockhouse -
-  // replacing the old single shared HOME_DEFENSE_TARGET pool that didn't
-  // distinguish between structure types at all (any mix of 4 or 6 units
-  // across any of the 7 old types satisfied it equally, so a ring could
-  // easily end up as, say, 6 turrets and zero foxholes). Fixed, randomized
-  // ONCE per match (see redHomeDefenseTargets, rolled in enterPlayMode) -
-  // "it will not spawn any more than this" is an explicit hard ceiling per
-  // type, so unlike the old defensive-mode behavior, this ring does NOT
-  // keep growing over the course of the match. The declaration stays
-  // reachable for aggressive mode too (it's read further below in
-  // homeDefendersReady/the free-pool exclusion filter), but the actual
-  // ASSIGNMENT loop right after it is skipped entirely for aggressive -
-  // "will no longer cluster around its base" - so nothing ever actually
-  // becomes a home defender there in the first place.
-  const HOME_DEFENSE_TYPES = ['turret', 'siegemortar', 'blockhouse', 'foxhole', 'barricade'];
-  if (redStrategy !== 'aggressive') {
-  HOME_DEFENSE_TYPES.forEach(type => {
-    const target = redHomeDefenseTargets[type];
-    const current = redTanks.filter(t => t.unitType===type && t.homeDefenseAssignment).length;
-    if (current >= target) return;
-    const needed = target - current;
-    const candidates = free.filter(t => t.unitType===type && !t.homeDefenseAssignment && !t.turretAssignment && !t.depotDefenseAssignment);
-    candidates.slice(0, needed).forEach(t=>{
-      t.homeDefenseAssignment = true;
-      const ang = Math.random()*Math.PI*2;
-      const dist = 140 + Math.random()*120;
-      const gx = redBase.x + Math.cos(ang)*dist, gy = redBase.y + Math.sin(ang)*dist;
-      issueMoveOrder(t, isMountain(gx,gy) ? redBase.x : gx, isMountain(gx,gy) ? redBase.y : gy);
-    });
-  });
-  // "These units will always be set to defend when they are in place
-  // between 100 and 300 pixels from the base" - a genuine BAND now, not
-  // just an upper bound the way the old flat "< 280" check was. A unit
-  // that's still further out than 300px keeps walking in (unchanged); one
-  // that's somehow ended up closer than 100px (a tight squeeze near an
-  // already-crowded base) simply waits rather than digging in prematurely
-  // right on top of the base itself - it'll still get deployed once
-  // something (its own idle wandering, or simply the ring filling in
-  // around it) puts it back within the band.
-  redTanks.forEach(t=>{
-    if (!HOME_DEFENSE_TYPES.includes(t.unitType) || !t.homeDefenseAssignment || t.target || t.defending) return;
-    const dist = Math.hypot(t.x-redBase.x, t.y-redBase.y);
-    if (dist >= 100 && dist <= 300) {
-      t.defending = true;
-      if (t.isDeployable) {
-        // Same road-avoidance nudge as the other two deployment sites - a
-        // home-defense unit settling into its ring position has no reason
-        // to avoid roads either, and the base's own access road often runs
-        // right through that 100-300px band.
-        const nudged = nudgeOffRoad(t.x, t.y, t.radius);
-        t.x = nudged.x; t.y = nudged.y;
-        t.permanentlyDeployed = true; // Turret/Blockhouse/Siege Mortar/Foxhole/Barricade all lock in permanently, same as any other deployment
-      }
-    }
-  });
-  } // end if (redStrategy !== 'aggressive') - home defense ring assignment/deployment
-  // exclude home defenders (assigned, whether still traveling or arrived and
-  // dug in) from the rest of this tick's rally/attack/defend logic
-  free = free.filter(t => !HOME_DEFENSE_TYPES.includes(t.unitType) || !t.homeDefenseAssignment);
 
   // --- Raiding parties: once defenses are established, send ever-larger raids
   // at blue's depots and base ---
@@ -9195,33 +8689,18 @@ function updateAI(dt) {
   // catches up once the raid's combat units have cleared the way - see
   // below), and grow larger over time, occasionally massing into a much
   // bigger raid, but never smaller than a fixed floor.
-  // In aggressive mode there's no waiting for anything: raids are the entire
-  // strategy from the very start, so this always reads as already established.
-  // "Ready" now means every one of the 5 deployable types has independently
-  // reached ITS OWN target (not a single combined headcount against one
-  // shared pool the way the old HOME_DEFENSE_TARGET worked) - a ring of,
-  // say, 8 turrets and zero foxholes would satisfy the old check but
-  // shouldn't count as "the base is properly fortified" under the new
-  // per-type targets, so this checks each type's own count against its own
-  // redHomeDefenseTargets entry.
-  const homeDefendersReady = HOME_DEFENSE_TYPES.every(type =>
-    redTanks.filter(t => t.unitType===type && t.homeDefenseAssignment).length >= redHomeDefenseTargets[type]
-  );
-  const anyDepotFullyGarrisoned = redOwnedDepots.some(dep=>{
-    if (Math.hypot(dep.x-redBase.x, dep.y-redBase.y) <= RALLY_RADIUS) return false; // a home depot doesn't count as "expansion" fortified
-    const guards = redTanks.filter(t => DEPLOYABLE_GUARD_TYPES.includes(t.unitType) && t.permanentlyDeployed && Math.hypot(t.x-dep.x,t.y-dep.y)<GUARD_PROXIMITY_RADIUS).length;
-    return guards >= guardsPerCapturedDepot();
-  });
-  const defensesEstablished = redStrategy === 'aggressive' || (homeDefendersReady && anyDepotFullyGarrisoned);
-
-  const rallied = free.filter(t => Math.hypot(t.x-redBase.x, t.y-redBase.y) <= RALLY_RADIUS);
-  const straggling = free.filter(t => t.unitType!=='artillery' && Math.hypot(t.x-redBase.x, t.y-redBase.y) > RALLY_RADIUS);
-
-  straggling.forEach(t=>{
-    if (t.state === 'idle') issueMoveOrder(t, redBase.x, redBase.y);
-  });
-
-  if (defensesEstablished && blueBase.alive) {
+  // Red now has exactly one behavior, always active from the very start of
+  // the match: there is no "defenses established" readiness gate to wait on
+  // any more (there's no home defense or depot garrison left to BE
+  // established in the first place - see above), and no requirement that
+  // units physically gather near red's own base before they're eligible for
+  // a raid. "They should be going out and searching for the blue team" -
+  // every free unit, wherever it currently is on the map, is a raid
+  // candidate; a raid's units simply converge on the chosen target from
+  // their own current positions rather than rallying at home first, which
+  // is exactly the "keep stopping near base to regroup" pattern this is
+  // meant to eliminate.
+  if (blueBase.alive) {
     // Raid size grows over the course of the match (same escalation curve
     // used for the old rally thresholds), with an occasional much larger
     // raid thrown in, but never smaller than 5 regardless of how early it is.
@@ -9229,129 +8708,64 @@ function updateAI(dt) {
     // massing a big raid each time, and it's willing to commit whatever it
     // currently has on hand rather than waiting for a full-sized pool to
     // accumulate first - prioritizing constant pressure over efficiency.
-    const isAggressive = redStrategy === 'aggressive';
-    // redPosture (see its own declaration/timer above) still drives wave
-    // pacing - "the red team will attack in waves; it will build up its
-    // forces and periodically advance" - by raising how large a pool has to
-    // be gathered before actually launching (see minPoolToLaunch below)
-    // during 'defend', versus pressing right at the normal target size
-    // during 'attack'. Aggressive strategy is unaffected either way - it
-    // already ignores posture and pushes constantly by design.
-    const posturePressing = isAggressive || redPosture === 'attack';
     // "Keep only minimal forces at home base, and send out the majority of
     // their units in attack groups of 10 to 20 units to attack the blue
-    // team in force." This is now the universal raid size for BOTH
-    // strategies, not just aggressive - defensive no longer ramps up from a
-    // tiny early-game raid size (previously as small as 5, taking several
-    // real minutes to even reach 10) or occasionally dumps an entire
-    // oversized pool via the old massedRaid roll. Every raid, from either
-    // strategy, targets the same 10-20 range; see takeWholePool further
-    // below for the one deliberate exception (draining a genuine idle
-    // backlog), which is a safety net against unassigned units piling up
-    // forever, not a normal attack wave.
+    // team in force." One hard range, every single raid, for the entire
+    // match - no ramp-up, no occasional oversized wave.
     const raidTarget = 10 + Math.floor(Math.random()*11);
 
-    const raidCandidates = rallied.filter(t => t.unitType==='tank' || t.unitType==='autotank' || t.unitType==='scout' || t.unitType==='mech' || t.unitType==='assaulttank' || t.unitType==='lrmmech');
+    // No "must be gathered near red's own base" requirement any more - "they
+    // should be going out and searching for the blue team" means a raid's
+    // units converge on the chosen target from wherever they already are,
+    // not from a rally point. A unit anywhere on the map that isn't already
+    // doing something else is a raid candidate.
+    const raidCandidates = free.filter(t => t.unitType==='tank' || t.unitType==='autotank' || t.unitType==='scout' || t.unitType==='mech' || t.unitType==='assaulttank' || t.unitType==='lrmmech');
     // Infantry is included too, but only once a raid is actually large enough
     // to be worth escorting a capturer into - a tiny 5-unit raid is purely a
     // combat probe, not a capture attempt.
-    const infantryForRaid = raidTarget >= 8 ? rallied.filter(t=>INFANTRY_CLASS_TYPES.has(t.unitType)) : [];
+    const infantryForRaid = raidTarget >= 8 ? free.filter(t=>INFANTRY_CLASS_TYPES.has(t.unitType)) : [];
     const raidPool = raidCandidates.concat(infantryForRaid);
 
-    // "Group their forces... before attacking" - aggressive now waits for the
-    // FULL target (the whole 10-20 group) to actually be gathered before
-    // launching at all, rather than the old "half the target is enough,
-    // throw it now" behavior. Defensive strategy is unchanged: it presses
-    // right at the full target size during an 'attack' posture window (the
-    // wave actually goes out once posture flips), but holds out for 30% more
-    // than the target while 'defend' posture is active, deliberately
-    // building up a larger reserve rather than dribbling out small groups -
-    // the stall-prevention/idle-backlog safety net further below still
-    // overrides this if the buildup goes on too long or too many units pile
-    // up unused, so this never risks units sitting idle forever.
-    const minPoolToLaunch = isAggressive ? raidTarget :
-      (posturePressing ? raidTarget : Math.ceil(raidTarget*1.3));
+    // Launches right at the full target size, every time - no waiting for a
+    // larger buffer first, since there's no "build up a reserve" posture to
+    // speak of any more; the whole point is constant pressure.
+    const minPoolToLaunch = raidTarget;
 
-    // Stall prevention: aggressive mode is meant to keep constant pressure on
-    // - if it's genuinely been too long since the last raid actually went
-    // out (raidCandidates keeps coming up empty or too small, e.g. because
-    // recent losses left red's rallied pool composed entirely of Infantry/
-    // Turret/Artillery/Mortar with nothing raid-eligible on hand, or because
-    // most of red's free units are scattered on guard/escort/garrison duty
-    // rather than physically gathered at the rally point), fall back to
-    // launching with whatever is actually available - not just what's
-    // already rallied at base, but any free unit anywhere on the map not
-    // currently doing something else meaningful - rather than waiting
-    // indefinitely for the "proper" composition to physically reassemble at
-    // one spot first. This only kicks in for aggressive mode, and only after
-    // a genuinely long drought (STALL_THRESHOLD), so it doesn't undercut the
-    // normal pool-size pacing in the common case where a real raid force
-    // assembles promptly.
-    //
-    // This is also triggered by a large BACKLOG of genuinely idle units,
-    // independent of timing - a real bug reproduced on Small maps (though
-    // the underlying issue isn't actually Small-map-specific, just far more
-    // visible there): raids were launching on schedule, but each wave only
-    // ever consumed a bounded number of units (raidTarget, typically 5-30),
-    // while total free-unit count kept growing unbounded as production
-    // continued. Any surplus beyond what the current raid wave happened to
-    // take was left with no assignment of any kind, forever - not stalled
-    // in the "no raid has launched recently" sense the timer-based check
-    // above catches, but stalled in the sense of a permanently growing pile
-    // of units doing nothing. Counting genuinely-unassigned idle units
-    // (not just time since last raid) catches this the timer alone cannot.
+    // Stall prevention: if it's genuinely been too long since the last raid
+    // actually went out (raidCandidates keeps coming up empty or too small,
+    // e.g. because recent losses left red with nothing raid-eligible on
+    // hand, or because most of red's free units are scattered on
+    // capture/escort/ambush duty), fall back to launching with whatever is
+    // actually available - any free unit anywhere on the map not currently
+    // doing something else meaningful - rather than waiting indefinitely for
+    // the "ideal" composition to come together. Also triggered by a large
+    // BACKLOG of genuinely idle units, independent of timing - a real bug
+    // found in testing: raids were launching on schedule, but each wave only
+    // ever consumed a bounded number of units, while total free-unit count
+    // kept growing unbounded as production continued, leaving any surplus
+    // with no assignment of any kind, forever.
     const STALL_THRESHOLD = 45; // seconds since last raid launch before forcing one anyway
     const IDLE_BACKLOG_THRESHOLD = 12; // this many fully-unassigned idle units piling up also forces a raid, regardless of timing
-    const genuinelyIdle = free.filter(t => !t.captureAssignment && !t.escortAssignment && !t.homeDefenseAssignment && !t.raidTargetId && !t.turretAssignment && !t.depotDefenseAssignment && !t.ambushAssignment && !(t.attackTarget && t.attackTarget.alive));
-    // Idle-backlog draining now applies regardless of stance (not just
-    // aggressive) - defensive mode's own garrison/home-defense systems only
-    // ever consume Turret/Blockhouse/Repair Station/Artillery/Mortar
-    // (DEPLOYABLE_GUARD_TYPES/HOME_DEFENSE_TYPES), so Tank/Scout/Auto Tank/
-    // Assault Tank/Mech/LRM Mech surplus had no productive role at all in
-    // defensive mode once capture/escort slots were full - it would just
-    // accumulate unassigned forever, same underlying bug as the aggressive-
-    // mode case above, just via a different path (no role for these types,
-    // rather than raids not draining fast enough). This is safe to allow in
-    // defensive mode specifically because this whole block is already
-    // gated by defensesEstablished above - a defensive-mode idle-backlog
-    // raid can only ever fire once garrisons/home-defense are genuinely
-    // met, consistent with "fortify everything before going on the
-    // offensive" rather than undercutting it.
-    const stalled = (isAggressive && (gameElapsed - lastRaidLaunchTime) > STALL_THRESHOLD) || genuinelyIdle.length >= IDLE_BACKLOG_THRESHOLD;
+    const genuinelyIdle = free.filter(t => !t.captureAssignment && !t.escortAssignment && !t.raidTargetId && !t.ambushAssignment && !(t.attackTarget && t.attackTarget.alive));
+    const stalled = (gameElapsed - lastRaidLaunchTime) > STALL_THRESHOLD || genuinelyIdle.length >= IDLE_BACKLOG_THRESHOLD;
     let effectiveMinPoolToLaunch = minPoolToLaunch;
     let effectiveRaidPool = raidPool;
     if (stalled) {
-      // Widen both WHO counts (fire-support/defensive types too, not just
-      // dedicated raid vanguard types) and WHERE they can be pulled from
-      // (anywhere on the map, not just already-rallied-at-base) - a
-      // genuine stall (whether from a timing drought or an idle backlog)
-      // means red is failing to actually commit its available force, not
-      // just failing to build the "ideal" raid composition, so the
-      // fallback needs to reach further than the normal pool does.
-      const stallEligibleTypes = ['tank','autotank','scout','mech','assaulttank','lrmmech','artillery','mortar','turret','infantry'];
-      const anywhereFallback = free.filter(t => stallEligibleTypes.includes(t.unitType) && !t.captureAssignment && !t.escortAssignment && !t.homeDefenseAssignment && !t.raidTargetId && !t.turretAssignment && !t.depotDefenseAssignment);
+      // Widen both WHO counts (fire-support-shaped types too, not just
+      // dedicated raid vanguard types) - a genuine stall means red is
+      // failing to actually commit its available force, not just failing to
+      // build the "ideal" raid composition, so the fallback needs to reach
+      // further than the normal pool does. Never exceeds raidTarget itself
+      // though (see raidForce below) - "groups of between 10 and 20" is a
+      // hard range, not just a floor.
+      const stallEligibleTypes = ['tank','autotank','scout','mech','assaulttank','lrmmech','artillery','mortar','infantry'];
+      const anywhereFallback = free.filter(t => stallEligibleTypes.includes(t.unitType) && !t.captureAssignment && !t.escortAssignment && !t.raidTargetId);
       effectiveRaidPool = anywhereFallback;
-      // When the backlog itself is what triggered this (not just a timing
-      // drought), send the WHOLE backlog rather than capping at whatever
-      // minPoolToLaunch would normally allow - the entire point is to drain
-      // the surplus, not launch another small wave that leaves just as much
-      // sitting idle as before.
       effectiveMinPoolToLaunch = Math.min(minPoolToLaunch, Math.max(3, effectiveRaidPool.length));
     }
 
     if (effectiveRaidPool.length >= effectiveMinPoolToLaunch && effectiveRaidPool.length > 0) {
-      // If this launch was triggered by a large idle backlog specifically,
-      // commit the entire available pool rather than the normal
-      // raidTarget-sized slice, so the backlog actually gets drained instead
-      // of shrinking by only a few units while the rest keep piling up. This
-      // is the one deliberate exception to "groups of 10 to 20" - a genuine
-      // overflow safety net against unassigned units accumulating forever,
-      // not a normal attack wave - and even then only for defensive mode;
-      // aggressive mode's own stall-recovery path (the stalled check above)
-      // already widens who's eligible without ever exceeding raidTarget.
-      const drainingBacklog = stalled && genuinelyIdle.length >= IDLE_BACKLOG_THRESHOLD;
-      const takeWholePool = !isAggressive && drainingBacklog;
-      const raidForce = effectiveRaidPool.slice(0, takeWholePool ? effectiveRaidPool.length : Math.min(effectiveRaidPool.length, raidTarget));
+      const raidForce = effectiveRaidPool.slice(0, Math.min(effectiveRaidPool.length, raidTarget));
       const target = pickRaidTarget();
       if (target) {
         raidForce.forEach((t, i)=>{
@@ -9433,20 +8847,21 @@ function updateAI(dt) {
       if (e.kind==='supply' && e.alive && e.team!=='red') candidates.push(e);
     });
     if (blueBase.alive) candidates.push(blueBase);
-    // Aggressive mode also considers blue's field units as raid targets, not
-    // just fixed depots/base - specifically, the largest nearby cluster of
-    // blue units (found by scoring each blue unit by how many other blue
-    // units are close to it), so a raid goes after a real concentration of
-    // force rather than chasing one isolated unit around the map.
-    if (redStrategy === 'aggressive') {
-      const blueUnits = entities.filter(e=>e.kind==='tank' && e.alive && e.team==='blue');
-      let bestCluster = null, bestClusterScore = -1;
-      blueUnits.forEach(u=>{
-        const nearbyCount = blueUnits.filter(o => Math.hypot(o.x-u.x,o.y-u.y) < 220).length;
-        if (nearbyCount > bestClusterScore) { bestClusterScore = nearbyCount; bestCluster = u; }
-      });
-      if (bestCluster) candidates.push(bestCluster);
-    }
+    // Also considers blue's field units as raid targets, not just fixed
+    // depots/base - specifically, the largest nearby cluster of blue units
+    // (found by scoring each blue unit by how many other blue units are
+    // close to it), so a raid goes after a real concentration of force
+    // rather than chasing one isolated unit around the map. This is exactly
+    // the "search for the blue team and attack them" behavior - red isn't
+    // just marching toward fixed objectives, it's actively hunting for
+    // wherever blue's actual forces are.
+    const blueUnits = entities.filter(e=>e.kind==='tank' && e.alive && e.team==='blue');
+    let bestCluster = null, bestClusterScore = -1;
+    blueUnits.forEach(u=>{
+      const nearbyCount = blueUnits.filter(o => Math.hypot(o.x-u.x,o.y-u.y) < 220).length;
+      if (nearbyCount > bestClusterScore) { bestClusterScore = nearbyCount; bestCluster = u; }
+    });
+    if (bestCluster) candidates.push(bestCluster);
     if (candidates.length===0) return null;
 
     let best=null, bestScore=-Infinity;
@@ -9500,50 +8915,27 @@ function updateAI(dt) {
     t.path = isMountain(wpX,wpY) ? null : [{x:wpX,y:wpY},{x:finalX,y:finalY}];
   }
 
-  // Attack/defend decision: red only ever launches an offensive push (marching
-  // toward blue's base) once it has gathered a proper strike force, sized by
-  // currentRallyMin()/currentRallyMax() - these grow as the game goes on, so
-  // early skirmishes are small but later pushes commit much larger mixed
-  // formations. This is strictly about the offensive order; units still
-  // defend themselves and the base individually via ordinary sight/react
-  // auto-engage regardless of rally size, so a small group under attack right
-  // at home will still fight back without that counting as "attacking".
-  if (!defensesEstablished) {
-    // Before defenses are established, red simply holds everyone near home
-    // rather than attacking at all - the raiding-party system above is the
-    // only offensive behavior once it's up and running. Artillery is
-    // excluded from the loiter-shuffle: constantly re-issuing it small wander
-    // orders would keep resetting its stationary setup timer and it would
-    // never be settled long enough to actually fire on anything that
-    // approaches, so it simply holds its current position instead.
-    rallied.filter(t=>t.unitType!=='artillery').forEach(t=>{
-      if (t.state === 'idle' || t.target) {
-        // gently loiter close to the base rather than freezing exactly on one spot
-        if (!t.target) {
-          const holdAngle = Math.random()*Math.PI*2;
-          const holdDist = 100 + Math.random()*80;
-          let tx = redBase.x + Math.cos(holdAngle)*holdDist;
-          let ty = redBase.y + Math.sin(holdAngle)*holdDist;
-          if (!isMountain(tx,ty)) issueMoveOrder(t, tx, ty);
-        }
-      }
-    });
-  } else {
-    // Defenses are established but no raid is currently large enough to
-    // launch - keep the rally pool loitering near home exactly as before,
-    // ready to be swept into the next raid once enough have gathered.
-    rallied.filter(t=>t.unitType!=='artillery' && !t.raidTargetId).forEach(t=>{
-      if (t.state === 'idle' || t.target) {
-        if (!t.target) {
-          const holdAngle = Math.random()*Math.PI*2;
-          const holdDist = 100 + Math.random()*80;
-          let tx = redBase.x + Math.cos(holdAngle)*holdDist;
-          let ty = redBase.y + Math.sin(holdAngle)*holdDist;
-          if (!isMountain(tx,ty)) issueMoveOrder(t, tx, ty);
-        }
-      }
-    });
-  }
+  // "They should be going out and searching for the blue team and when they
+  // locate any blue team units they should attack them." Any unit that is
+  // otherwise unassigned (not capturing, escorting, raiding, or ambushing)
+  // and currently idle with no order of its own is sent toward blue's side
+  // of the map, spread around blue's base rather than all converging on one
+  // exact point - ordinary auto-engage (see updateAutoEngage, which runs for
+  // every unit regardless of what order it's under) takes over the moment
+  // anything comes within sight or react range along the way, so this is
+  // genuinely searching ground, not marching blindly to one fixed spot and
+  // ignoring everything else. There is no more "hold near home" case at all.
+  // Artillery is excluded: once it has any order at all it's left to dig in
+  // and fight wherever it already is, since constantly re-issuing it a fresh
+  // move order would keep resetting its stationary setup timer and it would
+  // never be settled long enough to actually fire at anything that
+  // approaches.
+  free.filter(t => t.unitType !== 'artillery' && t.state === 'idle' && !t.target).forEach(t => {
+    const jitter = 300;
+    const tx = blueBase.x + (Math.random()*2-1)*jitter;
+    const ty = blueBase.y + (Math.random()*2-1)*jitter;
+    if (!isMountain(tx,ty)) issueMoveOrder(t, tx, ty);
+  });
 }
 
 
@@ -11939,23 +11331,12 @@ document.getElementById('btnRestart').addEventListener('click', ()=> location.re
 document.getElementById('versionTag').textContent = 'v' + GAME_VERSION;
 document.getElementById('launchVersion').textContent = 'v' + GAME_VERSION;
 
-function enterPlayMode(strategy, mapSize, biome, mechsCanCapture, neutralStartRed) {
-  redStrategy = strategy;
+function enterPlayMode(mapSize, biome, mechsCanCapture, neutralStartRed) {
   mechsCanCaptureSupply = !!mechsCanCapture;
   // Must be set before generateNewMap runs below - that's what actually
   // calls placeNeutralSupplyDepots/placeExtraRandomSupplyDepots, which read
   // this flag at the moment each depot is created.
   neutralDepotsStartRed = !!neutralStartRed;
-  // Home-defense targets, re-set fresh at the start of every match (done
-  // here, at the same point map/team setup happens, rather than only where
-  // redHomeDefenseTargets is first declared, since that declaration only
-  // needs to run once when the script loads). Capped at 6 total across all
-  // five types - "keep only minimal forces at their home base" - see the
-  // comment on the top-level declaration for the exact breakdown.
-  redHomeDefenseTargets = {
-    foxhole: 2, barricade: 1,
-    turret: 1, siegemortar: 1, blockhouse: 1
-  };
   appState = 'play';
   document.getElementById('launchScreen').style.display = 'none';
   document.getElementById('btnTestDone').style.display = 'none';
@@ -12157,7 +11538,6 @@ document.getElementById('btnCloseInstructions').addEventListener('click', ()=>{
 // single-select-per-group pattern rather than separate state variables per
 // group, so adding a future 4th group (or more biome choices) doesn't need
 // new plumbing beyond another data-group value.
-let selectedStance = 'aggressive';
 let selectedMapSize = 'medium';
 let selectedBiome = 'desert';
 let selectedMechCapture = 'off';
@@ -12166,8 +11546,7 @@ function setOptionSelection(group, value) {
   document.querySelectorAll(`.optionBtn[data-group="${group}"]`).forEach(btn=>{
     btn.classList.toggle('selected', btn.dataset.value === value);
   });
-  if (group === 'stance') selectedStance = value;
-  else if (group === 'size') selectedMapSize = value;
+  if (group === 'size') selectedMapSize = value;
   else if (group === 'biome') selectedBiome = value;
   else if (group === 'mechCapture') selectedMechCapture = value;
   else if (group === 'neutralStartRed') selectedNeutralStartRed = value;
@@ -12177,7 +11556,6 @@ document.querySelectorAll('.optionBtn').forEach(btn=>{
 });
 // initialize each group's visible default selection to match the state
 // variables above, so the screen doesn't open with nothing highlighted
-setOptionSelection('stance', selectedStance);
 setOptionSelection('size', selectedMapSize);
 setOptionSelection('biome', selectedBiome);
 setOptionSelection('mechCapture', selectedMechCapture);
@@ -12191,7 +11569,7 @@ document.getElementById('btnOptionsConfirm').addEventListener('click', ()=>{
   document.getElementById('optionsScreen').style.display = 'none';
   // selectedBiome is now genuinely used - see BIOME_CONFIGS/applyBiome for
   // the full per-biome generation differences.
-  enterPlayMode(selectedStance, selectedMapSize, selectedBiome, selectedMechCapture === 'on', selectedNeutralStartRed === 'on');
+  enterPlayMode(selectedMapSize, selectedBiome, selectedMechCapture === 'on', selectedNeutralStartRed === 'on');
 });
 
 // ---------- Unit Options screen ----------
@@ -12361,7 +11739,7 @@ function serializeGame() {
     supply: { blue: supply.blue, red: supply.red },
     camera: { x: camera.x, y: camera.y, zoom: camera.zoom },
     redAI: {
-      aiTimer, redPosture, redPostureTimer
+      aiTimer
     },
     settings: {
       revealAll: !!revealAll,
@@ -12765,8 +12143,6 @@ function applyLoadedGame(data) {
   supply.red = data.supply.red;
   camera.x = data.camera.x; camera.y = data.camera.y; camera.zoom = data.camera.zoom;
   aiTimer = data.redAI.aiTimer;
-  redPosture = data.redAI.redPosture;
-  redPostureTimer = data.redAI.redPostureTimer;
   fogExplored.set(data.fogExplored);
   fogGrid.fill(0); // current-frame visibility recomputes fresh next frame regardless
 
