@@ -824,7 +824,7 @@ let hardMode = false;
 
 // Bumped by one on every exported build so a stale cached copy is always
 // visually distinguishable from the latest version.
-const GAME_VERSION = 167;
+const GAME_VERSION = 169;
 
 // ---------- Art style palette ----------
 // Solid-shape earth-tone style: natural ground colors, dark grey unit hulls,
@@ -1167,13 +1167,13 @@ function drawCompounds() {
 // preserving the source's real aspect ratio - never stretching a
 // non-square image into a square the way a naive drawImage(img,
 // -s/2,-s/2,s,s) call would.
-function drawSpriteAspectFit(img, targetSize) {
+function drawSpriteAspectFit(img, targetSize, targetCtx) {
   if (!img.naturalWidth || !img.naturalHeight) return; // not decoded yet, skip this frame rather than draw a broken 0x0 image
   const aspect = img.naturalWidth / img.naturalHeight;
   let w, h;
   if (aspect >= 1) { w = targetSize; h = targetSize/aspect; }
   else { h = targetSize; w = targetSize*aspect; }
-  ctx.drawImage(img, -w/2, -h/2, w, h);
+  (targetCtx || ctx).drawImage(img, -w/2, -h/2, w, h);
 }
 
 // ---------------------------------------------------------------------------
@@ -6252,6 +6252,7 @@ function makeTank(team, x, y, unitType) {
     stagingStartTime: null, // gameElapsed when this unit started gathering at a staging depot (raidRole==='staging'), so a slow-to-gather group can still launch after a timeout rather than waiting forever
     prevEngageTargetId: null, // id of the attackTarget prevEngageDist was last measured against, so a freshly-acquired target is never compared against a stale distance to a different one
     prevEngageDist: null, // this unit's own last-measured distance to its current attackTarget, used to detect the enemy closing in faster than this unit's own approach alone would explain (red only - see holdsGround)
+    autoDefendFromAdvance: false, // true only when THIS mechanism set t.defending (not a player DEFEND order or the stealth-detection dig-in, which also use t.defending) - lets the attack-commit-threshold release below know which defending units are actually its own to release
     turretAssignment: null,  // id of a supply depot this turret (red AI) has been sent to guard, if any
     redFormationOffset: 0,  // red-only: lateral offset from a shared target's line of approach, so a group fans out side by side instead of stacking
     holdsGroundFixed: false, // true while actively dug in and engaged (units with setup time): protects against collision jostling resetting setup progress
@@ -6329,6 +6330,7 @@ function issueMoveOrder(t, x, y, suppressAutoEngage) {
   t.autoEngaged = false;
   t.holdEngage = !!suppressAutoEngage;
   t.defending = false; // any move order cancels defend mode
+  t.autoDefendFromAdvance = false; // and with it, any pending auto-defend-release tracking - a fresh order is a clean slate either way
   // A move order is an explicit player command, which per the design is
   // exactly what should end stealth concealment ("will not move or react
   // until ordered, or they are detected") - clear it here so the unit
@@ -9560,10 +9562,33 @@ function updateTank(t, dt, now) {
         // otherwise send two approaching forces straight past whatever
         // firing line red has already formed up into). Blue is unaffected -
         // the player directs blue's units manually.
-        if (t.team === 'red' && t.prevEngageTargetId === t.attackTarget.id && t.prevEngageDist != null) {
-          const closedBy = t.prevEngageDist - d;
-          const ownContribution = effectiveSpeed(t) * dt * 1.2; // margin for an angled, non-direct approach path
-          if (closedBy > ownContribution) t.defending = true;
+        //
+        // "There needs to be a point where the red team attacks earlier.
+        // Perhaps if they have a team of 5 units." Left unchecked, this
+        // defend trigger had no way to ever let go again once set - a group
+        // would dig in and then simply sit there taking it, which is
+        // exactly the wrong response to long-range Artillery/Mortar fire
+        // (a stationary target eats far more of it than one that closes the
+        // distance and gets the engagement over with, and Artillery/Mortar
+        // in particular never has to "advance" at all to keep punishing a
+        // group that never stops defending). So the trigger only fires at
+        // all while this target's group is still small, and any unit it
+        // previously put into Defend gets released the moment that same
+        // group's size reaches the threshold - small groups still hold and
+        // let reinforcements catch up, but once there's a real force on
+        // hand it commits to the attack instead of turtling indefinitely.
+        const ATTACK_COMMIT_THRESHOLD = 5;
+        if (t.team === 'red') {
+          const sameTargetGroupSize = getTanks('red').filter(o => o.attackTarget === t.attackTarget).length;
+          if (t.prevEngageTargetId === t.attackTarget.id && t.prevEngageDist != null && sameTargetGroupSize < ATTACK_COMMIT_THRESHOLD) {
+            const closedBy = t.prevEngageDist - d;
+            const ownContribution = effectiveSpeed(t) * dt * 1.2; // margin for an angled, non-direct approach path
+            if (closedBy > ownContribution) { t.defending = true; t.autoDefendFromAdvance = true; }
+          }
+          if (t.defending && t.autoDefendFromAdvance && sameTargetGroupSize >= ATTACK_COMMIT_THRESHOLD) {
+            t.defending = false;
+            t.autoDefendFromAdvance = false;
+          }
         }
         t.prevEngageTargetId = t.attackTarget.id;
         t.prevEngageDist = d;
@@ -10185,22 +10210,48 @@ function drawBurningDebris() {
 
 // ---------------------------------------------------------------------------
 // Burning wreck system: a destroyed unit/building leaves a charred wreck
-// sprite at its death position for a long time (WRECK_LINGER_TIME, a few
-// minutes) before fading out, with an active fire+smoke effect for a
-// shorter burn window (WRECK_BURN_TIME, ~19s) right after death. This is
+// sprite at its death position permanently, baked directly into the world
+// damage canvas exactly like a crater (see bakeWreckToTerrain) rather than
+// being tracked and faded out over time, with an active fire+smoke effect
+// for a burn window (WRECK_BURN_TIME, ~19s) right after death. This is
 // deliberately separate from the existing explosions/lingeringSmoke arrays -
 // those cover the instantaneous blast (shockwave, debris, a few seconds of
-// drifting smoke) that happens at the moment of destruction, while wrecks
-// are a much longer-lived, positionally-fixed marker of "a unit died here",
-// using the unit's own sprite family rather than a generic burn effect.
-// Applies to every unit and building (kind: 'tank' in this codebase covers
-// both mobile units and static structures like Turret/Blockhouse/Foxhole/
-// Repair Station), matching how the existing death-explosion already does.
+// drifting smoke) that happens at the moment of destruction, while a wreck
+// is a permanent, positionally-fixed marker of "a unit died here", using the
+// unit's own sprite family rather than a generic burn effect. Applies to
+// every unit and building (kind: 'tank' in this codebase covers both mobile
+// units and static structures like Turret/Blockhouse/Foxhole/Repair
+// Station), matching how the existing death-explosion already does.
 // ---------------------------------------------------------------------------
 let wrecks = [];
 const WRECK_BURN_TIME = 19000; // ms - active fire+smoke particles spawn during this window
-const WRECK_LINGER_TIME = 150000; // ms - total time the wreck sprite remains before fading (~2.5 minutes)
-const WRECK_FADE_TIME = 4000; // ms - final fade-to-transparent duration at the end of the linger window
+
+// Bakes a wreck's sprite directly into the permanent world-sized damage
+// canvas, exactly like a crater or scorch mark - "bake the wreck graphic
+// into the map as you do with craters, so there's no need to track it and
+// have it fade out." Drawn in WORLD coordinates with no camera.zoom
+// adjustment at all, since damageCtx represents the world at 1:1 scale and
+// is itself scaled/positioned as a single image at draw time (see the
+// "Permanent battle damage" block in the main render loop) - unlike the old
+// live-sprite rendering, which had to convert to screen space every frame.
+// Once baked, a wreck is just pixels: permanent, requires no further
+// per-frame work, and inherits the exact same fog-of-war treatment craters
+// already get (visible once explored, regardless of team or current line of
+// sight) rather than the old team-specific rule (blue wrecks always shown,
+// red wrecks only while currently in sight).
+function bakeWreckToTerrain(unitType, x, y, angle, radius) {
+  const key = 'wreck_' + unitType;
+  if (!wreckSpriteReady[key]) return false; // sprite not decoded yet - caller retries later
+  const img = wreckSprites[key];
+  const displaySize = radius * 2.2; // matches the live sprite's own display-size convention
+  const facingOffset = SPRITE_FACING_UP.has(unitType) ? SPRITE_ROTATION_OFFSET : 0;
+  damageCtx.save();
+  damageCtx.translate(x, y);
+  damageCtx.rotate((angle || 0) + facingOffset);
+  drawSpriteAspectFit(img, displaySize, damageCtx);
+  damageCtx.restore();
+  return true;
+}
 
 function spawnWreck(e) {
   // ~20% of wrecks get a distinct, longer-burning open flame instead of (in
@@ -10209,6 +10260,14 @@ function spawnWreck(e) {
   // updateWreckFlames below. Rolled once at spawn time and stored on the
   // wreck itself so it stays consistent for that wreck's whole lifetime.
   const hasFlame = Math.random() < FLAME_CHANCE;
+  const baked = bakeWreckToTerrain(e.unitType, e.x, e.y, e.angle, e.radius);
+  // This array now exists purely to drive the temporary burning
+  // (ember/flame/smoke) animation, and to retry baking on a later tick in
+  // the rare case the sprite hadn't finished loading yet at the moment of
+  // death - it is no longer what makes the wreck itself visible or keeps it
+  // around; the baked image in damageCtx handles that permanently and needs
+  // no further tracking at all. An entry is removed once it's both baked
+  // and done burning (see updateWrecks).
   wrecks.push({
     x: e.x, y: e.y,
     angle: e.angle || 0,
@@ -10219,7 +10278,8 @@ function spawnWreck(e) {
     nextEmberAt: performance.now(), // fires immediately on the first update tick
     hasFlame,
     flameDuration: hasFlame ? (FLAME_MIN_DURATION + Math.random()*(FLAME_MAX_DURATION-FLAME_MIN_DURATION)) : 0,
-    nextFlameSmokeAt: performance.now()
+    nextFlameSmokeAt: performance.now(),
+    baked
   });
 }
 
@@ -10368,6 +10428,11 @@ function spawnWreckEmber(w) {
 function updateWrecks(dt) {
   const now = performance.now();
   wrecks.forEach(w => {
+    // Sprite wasn't decoded yet at the moment of death (rare - only possible
+    // very early on) - keep retrying each tick until it's ready, so the
+    // wreck still ends up permanently baked rather than silently never
+    // appearing at all.
+    if (!w.baked) w.baked = bakeWreckToTerrain(w.unitType, w.x, w.y, w.angle, w.radius);
     const age = now - w.born;
     if (age < WRECK_BURN_TIME && now >= w.nextEmberAt) {
       spawnWreckEmber(w);
@@ -10375,48 +10440,22 @@ function updateWrecks(dt) {
     }
   });
   updateWreckFlames(dt);
-  // A wreck with an active long-burn flame must stay in the array for at
-  // least as long as its flame lasts, even past the normal
-  // WRECK_LINGER_TIME, so a several-minute fire is never cut short by the
-  // sprite itself disappearing out from under it.
-  wrecks = wrecks.filter(w => (now - w.born < WRECK_LINGER_TIME) || (w.hasFlame && now - w.born < w.flameDuration));
+  // Once a wreck is both baked (permanent in the terrain now) and done
+  // burning (ember window elapsed, and any long-burn flame has finished),
+  // this array has nothing left to do for it - the sprite's own visibility
+  // no longer depends on this entry existing at all, unlike the old fading
+  // system, so there's no need to keep it around for any fixed linger time.
+  wrecks = wrecks.filter(w => !w.baked || (now - w.born < WRECK_BURN_TIME) || (w.hasFlame && now - w.born < w.flameDuration));
 }
 
 function drawWrecks() {
-  const now = performance.now();
-  wrecks.forEach(w => {
-    // Red wrecks respect fog of war exactly like live red units do - you
-    // shouldn't be able to see a wreck sitting in territory you can't
-    // currently see any more than you could see a live unit there. Blue's
-    // own wrecks are always visible, matching how live blue units work.
-    if (w.team !== 'blue' && !isVisible(w.x, w.y)) return;
-
-    const key = 'wreck_' + w.unitType;
-    if (!wreckSpriteReady[key]) return; // skip until the wreck sprite has loaded, rather than drawing nothing useful
-    const img = wreckSprites[key];
-
-    const s = worldToScreen(w.x, w.y);
-    const r = w.radius * camera.zoom;
-    const displaySize = r*2.2; // matches the live sprite's own display-size convention
-
-    const age = now - w.born;
-    let alpha = 1;
-    if (age > WRECK_LINGER_TIME - WRECK_FADE_TIME && !(w.hasFlame && age < w.flameDuration)) {
-      // Skip the normal fade-out entirely while a long-burn flame is still
-      // active past the usual linger window - the wreck should stay fully
-      // visible for as long as it's still on fire, only fading once the
-      // fire itself has actually gone out.
-      alpha = Math.max(0, (WRECK_LINGER_TIME - age) / WRECK_FADE_TIME);
-    }
-
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(s.x, s.y);
-    const facingOffset = SPRITE_FACING_UP.has(w.unitType) ? SPRITE_ROTATION_OFFSET : 0;
-    ctx.rotate(w.angle + facingOffset);
-    drawSpriteAspectFit(img, displaySize);
-    ctx.restore();
-  });
+  // The wreck sprite itself is no longer drawn here at all - it's baked
+  // directly into damageCtx the moment the unit dies (see spawnWreck/
+  // bakeWreckToTerrain) and rendered as part of the single permanent damage
+  // image, exactly like a crater. This now only drives the temporary
+  // burning overlay (embers/flame/smoke) for wrecks still within their burn
+  // window - a purely time-limited animation that, unlike the sprite
+  // itself, genuinely can't be baked into a static image.
   drawWreckFlames();
   drawFlameSmoke();
 }
